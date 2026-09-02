@@ -147,8 +147,7 @@ a dashboard instead, there's a commented-out block at the bottom of
 
 ## Enrolling a new user, step by step
 
-How to actually move your head for each direction (straight from the
-manual's section 4.2, "Face Orientation Parameters" - Figures 5-7):
+How to actually move your head for each direction:
 
 ![How to position your face for each enroll direction: pitch up/down, yaw left/right, and don't roll/tilt your head sideways](docs/face-orientation.png)
 
