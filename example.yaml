@@ -1,5 +1,7 @@
 # Example ESPHome configuration for the GROW FP002 facial/palm-vein module,
-# extended with add/delete user support callable directly from Home Assistant.
+# with add/delete user support exposed as regular device entities in Home
+# Assistant (Settings -> Devices & Services -> ESPHome -> this device) - no
+# Developer Tools/Actions needed for day-to-day use.
 #
 # Wiring (module -> ESP32):
 #   VCC (pin1)  -> external 5-12V supply (NOT the ESP32's 3.3V pin - check current draw, ~200mA)
@@ -29,8 +31,12 @@ wifi:
 
 api:
   services:
-    # Call from HA: Developer Tools -> Actions -> ESPHome: <device> Add User
-    # (or `esphome.fp002_face_recognition_add_user` from an automation/script).
+    # Optional: the same add/delete/delete-all actions as the device entities
+    # further down, but callable from an automation/script or Developer Tools
+    # -> Actions instead of clicking through the UI. If you only want the
+    # entities (the more "user friendly" day-to-day way to manage users), you
+    # can delete this whole `api: services:` block - it's independent of them.
+    #
     # By default this drives the module's interactive 5-direction enroll (better
     # accuracy - the module's LED blinks green once per captured direction, 3x on
     # completion, red 2x on failure). Set quick=true for a single-photo enroll
@@ -132,7 +138,7 @@ fp002:
     - logger.log: "All matching users deleted"
 
 # You can also call these from any other automation/lambda, e.g. a physical
-# button on the ESP32 itself, without going through a Home Assistant service:
+# button on the ESP32 itself, without going through Home Assistant at all:
 #   id(fp002_module).start_verify();
 #   id(fp002_module).enroll_user("Robert", false, false);         // name, admin, palm_vein -> interactive 5-direction
 #   id(fp002_module).enroll_user("Robert", false, false, true);   // ... add quick=true for single-photo instead
@@ -141,35 +147,101 @@ fp002:
 #   id(fp002_module).refresh_user_list();
 #   id(fp002_module).reset_module();
 
-# --- Optional: no-YAML dashboard controls instead of/alongside the HA services above ---
-# Uncomment this block if you'd rather add/delete users by typing into a text
-# box and pressing a button on a Lovelace dashboard than by calling a service.
-#
-# text:
-#   - platform: template
-#     name: "New User Name"
-#     id: new_user_name
-#     mode: text
-#     optimistic: true
-#
-# number:
-#   - platform: template
-#     name: "Delete User Id"
-#     id: delete_user_id_number
-#     min_value: 1
-#     max_value: 800
-#     step: 1
-#     mode: box
-#     optimistic: true
-#
-# button:
-#   - platform: template
-#     name: "Enroll New Face"
-#     on_press:
-#       - lambda: |-
-#           id(fp002_module).enroll_user(id(new_user_name).state, false, false);
-#   - platform: template
-#     name: "Delete User By Id"
-#     on_press:
-#       - lambda: |-
-#           id(fp002_module).delete_user((uint16_t) id(delete_user_id_number).state, false);
+# --- Add/delete users as regular device entities, no Developer Tools/Actions
+# needed. These show up under Settings -> Devices & Services -> ESPHome ->
+# this device (and on its device page/dashboard card) right alongside
+# Registered User Ids/Count above, same as any other entity - fill in the
+# text box, flip the toggles you need, press the button. This is the
+# recommended way to manage users day to day; the `api: services:` block
+# above is still there if you'd rather drive this from an automation/script.
+
+text:
+  - platform: template
+    name: "New User Name"
+    id: new_user_name
+    icon: "mdi:account-plus"
+    mode: text
+    optimistic: true
+
+switch:
+  - platform: template
+    name: "New User Is Admin"
+    id: new_user_admin
+    icon: "mdi:shield-account"
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "New User Is Palm Vein"
+    id: new_user_palm_vein
+    icon: "mdi:hand-back-right"
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "New User Quick Enroll (single photo)"
+    id: new_user_quick
+    icon: "mdi:camera-timer"
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "Delete User Is Palm Vein"
+    id: delete_user_palm_vein
+    icon: "mdi:hand-back-right"
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+
+number:
+  - platform: template
+    name: "Delete User Id"
+    id: delete_user_id_number
+    icon: "mdi:account-remove"
+    min_value: 1
+    max_value: 800
+    step: 1
+    mode: box
+    optimistic: true
+
+select:
+  - platform: template
+    name: "Delete All Users - Which"
+    id: delete_all_type
+    icon: "mdi:account-multiple-remove"
+    optimistic: true
+    options:
+      - "All users"
+      - "Face users only"
+      - "Palm-vein users only"
+      - "General users only"
+    initial_option: "All users"
+
+button:
+  - platform: template
+    name: "Enroll New User"
+    icon: "mdi:account-plus"
+    on_press:
+      - lambda: |-
+          id(fp002_module).enroll_user(id(new_user_name).state, id(new_user_admin).state,
+                                        id(new_user_palm_vein).state, id(new_user_quick).state);
+
+  - platform: template
+    name: "Delete User By Id"
+    icon: "mdi:account-remove"
+    on_press:
+      - lambda: |-
+          id(fp002_module).delete_user((uint16_t) id(delete_user_id_number).state,
+                                        id(delete_user_palm_vein).state);
+
+  - platform: template
+    name: "Delete ALL Users"
+    icon: "mdi:account-multiple-remove"
+    # Careful - wipes every enrolled user matching the selected type, no
+    # confirmation dialog on the ESP32 side. (A future version of this
+    # component could gate this behind a second "arm" switch if that's
+    # something you'd want - easy to add.)
+    on_press:
+      - lambda: |-
+          uint8_t type = 0;
+          std::string which = id(delete_all_type).state;
+          if (which == "Face users only") type = 1;
+          else if (which == "Palm-vein users only") type = 2;
+          else if (which == "General users only") type = 3;
+          id(fp002_module).delete_all_users(type);

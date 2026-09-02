@@ -40,10 +40,12 @@ very welcome, that's the point of this thread.
   numeric id, plus `on_face_recognized` / `on_face_rejected` automation
   triggers - wire these to a relay/lock, a notification, whatever you need.
 - **Enroll / delete users directly from Home Assistant**, no companion app,
-  no vendor Windows tool required: exposed as native ESPHome/HA services
-  (`esphome.<device>_add_user`, `..._delete_user`, `..._delete_all_users`),
-  callable from Developer Tools -> Actions, automations, or a dashboard
-  button.
+  no vendor Windows tool required, no Developer Tools/Actions either: it's a
+  handful of regular entities (a text box, some toggles, buttons) that show
+  up on the device itself under **Settings -> Devices & Services -> ESPHome**,
+  right alongside its other sensors. Optional native HA services
+  (`esphome.<device>_add_user`, `..._delete_user`, `..._delete_all_users`)
+  are also there if you'd rather drive this from an automation/script.
 - A `registered_user_ids` / `registered_user_count` sensor pair, auto
   refreshed after boot and after every enroll/delete, so you can actually
   see which id to delete.
@@ -97,8 +99,7 @@ external_components:
 instead.)
 
 Then see [`example.yaml`](example.yaml) for a complete working configuration,
-including the Home Assistant service definitions for add/delete user. The
-short version:
+including the add/delete-user entities described below. The short version:
 
 ```yaml
 uart:
@@ -127,23 +128,39 @@ fp002:
         args: ["user_id", "user_name.c_str()"]
 ```
 
-## Calling it from Home Assistant
+## Managing users as device entities (recommended)
 
-With the `api: services:` block from `example.yaml`, three actions show up
-under **Developer Tools -> Actions**:
+`example.yaml` adds these as plain entities on the `fp002` device - no
+Developer Tools, no calling a service, just fill in/flip/press like any
+other entity. They show up under **Settings -> Devices & Services ->
+ESPHome -> your device** (and on its device page), right next to
+`Registered User Ids`/`Registered User Count`:
 
-- `esphome.<device>_add_user` - fields `user_name` (text), `admin` (bool),
-  `palm_vein` (bool), `quick` (bool - true for one-photo enroll instead of
-  the interactive 5-direction default)
-- `esphome.<device>_delete_user` - fields `user_id` (number), `palm_vein`
-  (bool)
-- `esphome.<device>_delete_all_users` - field `type` (number, 0=all,
-  1=face, 2=palm, 3=general) - **destructive, no confirmation dialog**
+- **New User Name** (text) - who you're enrolling.
+- **New User Is Admin** / **New User Is Palm Vein** / **New User Quick
+  Enroll (single photo)** (switches) - flip on whichever apply, leave the
+  rest off. Quick enroll off = the interactive 5-direction enroll (the
+  default and the recommended one - see the step-by-step below); palm vein
+  always uses single-photo regardless of the quick switch, since the module
+  has no interactive mode for it.
+- **Enroll New User** (button) - starts it, using whatever's currently set
+  in the fields/switches above.
+- **Delete User Id** (number) + **Delete User Is Palm Vein** (switch) +
+  **Delete User By Id** (button) - delete one user.
+- **Delete All Users - Which** (dropdown: all/face only/palm only/general
+  only) + **Delete ALL Users** (button) - bulk delete. **Destructive, no
+  confirmation dialog** - double-check the dropdown before pressing it.
 
-Call them from a script, an automation, or a Lovelace button that calls a
-service. If you'd rather have plain `text` / `number` / `button` entities on
-a dashboard instead, there's a commented-out block at the bottom of
-`example.yaml` for that.
+## Calling it from an automation or script (optional)
+
+If you'd rather trigger add/delete from an automation or script instead of
+clicking through entities, `example.yaml` also has an `api: services:`
+block exposing the same three actions under **Developer Tools -> Actions**:
+`esphome.<device>_add_user` (fields `user_name`, `admin`, `palm_vein`,
+`quick`), `esphome.<device>_delete_user` (`user_id`, `palm_vein`), and
+`esphome.<device>_delete_all_users` (`type`: 0=all, 1=face, 2=palm,
+3=general). It's independent of the entities above - keep it, or delete the
+whole block from your YAML if you only want the entities.
 
 ## Enrolling a new user, step by step
 
@@ -160,10 +177,11 @@ angle detection regardless of which direction is currently being captured.
 1. Position the module at face height, roughly **45-65cm** away (the
    manual's optimal range for face registration - it'll work anywhere from
    20-90cm, but closer to the optimum registers more reliably).
-2. In Home Assistant, go to **Developer Tools -> Actions**, find
-   `esphome.<device>_add_user`, and call it with `user_name` filled in,
-   `admin`/`palm_vein` as needed, and `quick` left `false` (the default) for
-   the more accurate interactive enroll.
+2. In Home Assistant, find the FP002 device (Settings -> Devices &
+   Services -> ESPHome, or its device page), type the person's name into
+   **New User Name**, flip **New User Is Admin** on if needed, and leave
+   **New User Quick Enroll** off for the more accurate interactive enroll.
+   Then press **Enroll New User**.
 3. Have the person look straight at the module (center/front). The LED
    blinks **green once** as soon as that direction is captured.
 4. One direction at a time - this component asks for them in the order
@@ -184,10 +202,10 @@ angle detection regardless of which direction is currently being captured.
    `on_enroll_failed` / the log for the reason code. A failed attempt
    doesn't leave anything partially registered, so just call `add_user`
    again from the start.
-8. In a hurry, or enrolling a palm instead of a face? Call `add_user` with
-   `quick: true` (and/or `palm_vein: true`) for the old single-photo enroll
-   instead - one frontal photo, no multi-step dance, just somewhat less
-   robust for recognition afterwards.
+8. In a hurry, or enrolling a palm instead of a face? Flip **New User Quick
+   Enroll** and/or **New User Is Palm Vein** on before pressing **Enroll New
+   User** for the old single-photo enroll instead - one frontal photo, no
+   multi-step dance, just somewhat less robust for recognition afterwards.
 
 ## Design notes / known unknowns
 
