@@ -48,8 +48,18 @@ very welcome, that's the point of this thread.
   refreshed after boot and after every enroll/delete, so you can actually
   see which id to delete.
 
-Enrollment uses a single frontal frame (`MID_ENROLL_SINGLE`), not the
-module's 5-direction interactive enrollment - see "Design notes" for why.
+Enrollment defaults to the module's **interactive 5-direction enroll**
+(`MID_ENROLL`: center, right, left, down, up) rather than a single photo, for
+better recognition accuracy. Since there's no screen to show "turn left /
+turn right" prompts, the module's own status LED is used as the feedback
+channel instead: it blinks **green once per captured direction** and
+**green 3x** on completion, or **red 2x** on failure - wire `on_enroll_success`
+/ `on_enroll_failed` to whatever notification you want in Home Assistant, and
+have the person slowly turn their head and pause after each blink. Pass
+`quick: true` to the `add_user` service (or `quick=true` to `enroll_user()`)
+for the old one-photo enroll instead - faster, but likely less robust.
+Palm-vein users always use the one-photo command, since the module has no
+interactive mode for palm vein.
 
 ## Hardware
 
@@ -83,8 +93,8 @@ external_components:
     components: [fp002]
 ```
 
-(Replace the URL once you've forked/cloned this under your own account, or
-just point it at this repo directly if you're using it as-is.)
+(If you forked this under your own account, point the URL at your fork
+instead.)
 
 Then see [`example.yaml`](example.yaml) for a complete working configuration,
 including the Home Assistant service definitions for add/delete user. The
@@ -123,7 +133,8 @@ With the `api: services:` block from `example.yaml`, three actions show up
 under **Developer Tools -> Actions**:
 
 - `esphome.<device>_add_user` - fields `user_name` (text), `admin` (bool),
-  `palm_vein` (bool)
+  `palm_vein` (bool), `quick` (bool - true for one-photo enroll instead of
+  the interactive 5-direction default)
 - `esphome.<device>_delete_user` - fields `user_id` (number), `palm_vein`
   (bool)
 - `esphome.<device>_delete_all_users` - field `type` (number, 0=all,
@@ -136,15 +147,18 @@ a dashboard instead, there's a commented-out block at the bottom of
 
 ## Design notes / known unknowns
 
-**Single-frame vs interactive enrollment.** The manual documents both
-`MID_ENROLL` (interactive, 5 directions with live posture feedback) and
-`MID_ENROLL_SINGLE` (one frontal photo). Interactive enrollment needs a live
-back-and-forth UI showing "turn left / turn right / done" as it happens,
-which doesn't map onto "call one HA service and walk away". This component
-uses single-frame enrollment, which is a plain one-shot command - the
-trade-off is it's likely somewhat less robust than a full 5-angle
-enrollment. Adding `MID_ENROLL` later would follow the same pattern, just
-looping over directions and reading the returned `face_direction` bitmap.
+**Interactive enrollment without a screen.** `MID_ENROLL` (5 directions:
+center, right, left, down, up) needs a command *per direction*, each waited
+on for its own REPLY - there's no single "just do it" command. Normally
+you'd pair that with a live UI showing "turn left / turn right / done".
+Since a Home Assistant service call has no such UI, this component instead
+drives the module's own status LED (`MID_LED_CONTROL`) as the feedback
+channel: green blink after each captured direction, 3 green blinks on
+completion, 2 red blinks on failure. The LED writes are fire-and-forget and
+non-blocking (`loop()` advances a small blink state machine and only sends
+the next direction's command once the blinks for the previous one finish),
+so it never blocks the rest of the device. `quick: true` skips all of this
+and falls back to the original single-frame `MID_ENROLL_SINGLE` command.
 
 **`MID_DELUSER` command byte vs `user_type` field.** The manual's table for
 this command lists two different command bytes - `0x20` for a face user and
@@ -171,6 +185,13 @@ to check with `logger: level: VERBOSE` - reports welcome.
   user_name (32 bytes), admin (1 byte), unlock_status (1 byte).
 - `MID_ENROLL_SINGLE` (`0x1D`): admin(1) + user_name(32) + face_direction(1,
   `0x00`=face/`0xFD`=palm) + timeout(1). Reply: user_id(2) + status(1).
+- `MID_ENROLL` (`0x13`, interactive): admin(1) + user_name(32) + direction(1,
+  one of `0x01` center/`0x02` right/`0x04` left/`0x08` down/`0x10` up) +
+  timeout(1) - sent once per direction. Reply: user_id(2, `0xFFFF` while more
+  directions are still needed, the real id once all 5 are captured) +
+  face_direction(1, cumulative bitmask of directions captured so far).
+- `MID_LED_CONTROL` (`0x90`): color(1, `0x00`=green/`0x01`=red/`0x02`=white) +
+  switch(1, **inverted**: `0x00`=on/`0x01`=off). No meaningful reply data.
 - `MID_DELUSER`: `0x20` (face) or `0x80` (palm), payload user_id(2) +
   user_type(1). No reply data.
 - `MID_DELALL` (`0x21`): type(1) + begin_id(2) + end_id(2, only meaningful

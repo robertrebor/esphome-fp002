@@ -31,14 +31,20 @@ api:
   services:
     # Call from HA: Developer Tools -> Actions -> ESPHome: <device> Add User
     # (or `esphome.fp002_face_recognition_add_user` from an automation/script).
+    # By default this drives the module's interactive 5-direction enroll (better
+    # accuracy - the module's LED blinks green once per captured direction, 3x on
+    # completion, red 2x on failure). Set quick=true for a single-photo enroll
+    # instead (faster, less robust). Palm vein always uses single-photo, quick or
+    # not, since the module has no interactive mode for it.
     - service: add_user
       variables:
         user_name: string
         admin: bool
         palm_vein: bool
+        quick: bool
       then:
         - lambda: |-
-            id(fp002_module).enroll_user(user_name, admin, palm_vein);
+            id(fp002_module).enroll_user(user_name, admin, palm_vein, quick);
 
     - service: delete_user
       variables:
@@ -128,7 +134,8 @@ fp002:
 # You can also call these from any other automation/lambda, e.g. a physical
 # button on the ESP32 itself, without going through a Home Assistant service:
 #   id(fp002_module).start_verify();
-#   id(fp002_module).enroll_user("Robert", false, false);   // name, admin, palm_vein
+#   id(fp002_module).enroll_user("Robert", false, false);         // name, admin, palm_vein -> interactive 5-direction
+#   id(fp002_module).enroll_user("Robert", false, false, true);   // ... add quick=true for single-photo instead
 #   id(fp002_module).delete_user(4, false);                 // user_id, palm_vein
 #   id(fp002_module).delete_all_users(0);                   // 0=all
 #   id(fp002_module).refresh_user_list();
