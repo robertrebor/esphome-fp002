@@ -34,6 +34,7 @@ static const uint8_t FP002_FRAME_NOTE = 0x01;
 static const uint8_t MID_RESET = 0x10;
 static const uint8_t MID_GETSTATUS = 0x11;
 static const uint8_t MID_VERIFY = 0x12;
+static const uint8_t MID_ENROLL = 0x13;          // interactive, 5-direction enroll
 static const uint8_t MID_ENROLL_SINGLE = 0x1D;
 static const uint8_t MID_DELUSER_FACE = 0x20;    // delete a single face user
 static const uint8_t MID_DELALL = 0x21;
@@ -51,6 +52,21 @@ static const uint8_t NID_EYE_STATE = 0x04;
 
 // Result codes
 static const uint8_t MR_SUCCESS = 0x00;
+static const uint8_t MR_FAILED4_TIMEOUT = 0x0D;  // used as our own host-side watchdog result too
+
+// face_direction codes for MID_ENROLL (section 4.2 of the manual). Sent one at a
+// time, host -> module; the module's REPLY echoes back a cumulative bitmask of
+// which directions have been captured so far (Figure 10).
+static const uint8_t FACE_DIRECTION_MIDDLE = 0x01;
+static const uint8_t FACE_DIRECTION_RIGHT = 0x02;
+static const uint8_t FACE_DIRECTION_LEFT = 0x04;
+static const uint8_t FACE_DIRECTION_DOWN = 0x08;
+static const uint8_t FACE_DIRECTION_UP = 0x10;
+
+// MID_LED_CONTROL color codes.
+static const uint8_t FP002_LED_GREEN = 0x00;
+static const uint8_t FP002_LED_RED = 0x01;
+static const uint8_t FP002_LED_WHITE = 0x02;
 
 // What command we're currently waiting on a REPLY for. Only one command is
 // ever "in flight" at a time - this keeps the auto-verify loop from
@@ -127,10 +143,17 @@ class Fp002Component : public Component, public uart::UARTDevice {
   /// call this yourself unless auto_verify is turned off.
   void start_verify();
 
-  /// Enroll a new user from a single frontal frame (MID_ENROLL_SINGLE). Point the
-  /// person at the camera before/while calling this - the module waits up to
-  /// `timeout` seconds for a usable frame.
-  void enroll_user(const std::string &user_name, bool admin = false, bool palm_vein = false, uint8_t timeout = 0);
+  /// Enroll a new user. By default this drives the module's interactive 5-direction
+  /// enroll (MID_ENROLL: center, right, left, down, up) for better recognition
+  /// accuracy than a single photo - the module's status LED blinks green once per
+  /// captured direction and 3x on completion (red 2x on failure), so point the
+  /// person at the camera and have them slowly follow the blinks/turn as prompted
+  /// by whatever you wire to on_enroll_success/on_enroll_failed.
+  /// Palm-vein users always use the single-frame command (MID_ENROLL_SINGLE) since
+  /// the module doesn't support interactive enroll for palm vein. Set `quick=true`
+  /// to use single-frame enroll for a face too (faster, one photo, less robust).
+  void enroll_user(const std::string &user_name, bool admin = false, bool palm_vein = false, bool quick = false,
+                    uint8_t timeout = 0);
 
   /// Delete one registered user by id. `palm_vein` must match how they were enrolled
   /// (face ids are 1-500, palm vein ids are 501-800 per the manual).
@@ -179,6 +202,27 @@ class Fp002Component : public Component, public uart::UARTDevice {
   std::string pending_enroll_name_;
   bool pending_enroll_admin_{false};
 
+  // Interactive (5-direction) enroll state. interactive_enroll_active_ stays true
+  // for the whole multi-step flow, including the gaps between steps while the LED
+  // is blinking - it's what keeps auto_verify from stepping on an enroll in
+  // progress and what the loop() step-sequencer checks to send the next direction.
+  bool interactive_enroll_active_{false};
+  uint8_t enroll_direction_index_{0};
+  uint8_t enroll_step_timeout_s_{15};
+  static const uint8_t NUM_ENROLL_DIRECTIONS = 5;
+
+  // Non-blocking LED blink feedback (MID_LED_CONTROL), used for enroll progress/
+  // success/failure. Fire-and-forget: doesn't go through pending_cmd_, so it can
+  // run in the gaps between enroll commands without the "module busy" guard.
+  bool led_blink_active_{false};
+  uint8_t led_blink_color_{0};
+  uint8_t led_blinks_target_{0};
+  uint8_t led_blinks_done_{0};
+  bool led_on_now_{false};
+  uint32_t led_next_toggle_ms_{0};
+  static const uint32_t LED_BLINK_ON_MS = 150;
+  static const uint32_t LED_BLINK_OFF_MS = 150;
+
   bool auto_verify_{true};
   uint8_t verify_timeout_{5};
   uint8_t enroll_timeout_{15};
@@ -188,10 +232,26 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void handle_reply_(uint8_t mid, uint8_t result, const uint8_t *data, size_t len);
   void handle_note_(uint8_t nid, const uint8_t *data, size_t len);
 
+  /// Low-level frame writer (sync word, mid, size, data, checksum) - shared by
+  /// send_command_() and send_led_(). Does not touch pending_cmd_ tracking.
+  void write_frame_(uint8_t mid, const std::vector<uint8_t> &data);
+
   /// Returns false (and logs) without sending anything if another command is
   /// still in flight.
   bool send_command_(uint8_t mid, const std::vector<uint8_t> &data, Fp002PendingCmd kind, uint32_t timeout_ms);
   static void append_name_(std::vector<uint8_t> &out, const std::string &name);
+
+  /// Send one direction of the interactive enroll (uses enroll_direction_index_).
+  void send_enroll_step_();
+
+  /// Fire-and-forget MID_LED_CONTROL. on=true turns the LED on (module's on/off
+  /// bit is inverted: 0x00=on, 0x01=off - handled here so callers don't need to
+  /// remember that).
+  void send_led_(uint8_t color, bool on);
+  /// Start a non-blocking blink sequence: `count` on/off cycles of `color`,
+  /// advanced from loop() via update_led_blinks_().
+  void start_led_blinks_(uint8_t color, uint8_t count);
+  void update_led_blinks_();
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *face_recognized_binary_sensor_{nullptr};

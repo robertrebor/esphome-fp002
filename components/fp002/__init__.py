@@ -4,7 +4,7 @@ from esphome import automation
 from esphome.components import uart, binary_sensor, text_sensor, sensor
 from esphome.const import CONF_ID, CONF_TRIGGER_ID
 
-CODEOWNERS = ["@your-github-handle"]
+CODEOWNERS = ["@robertrebor"]
 DEPENDENCIES = ["uart"]
 AUTO_LOAD = ["binary_sensor", "text_sensor", "sensor"]
 MULTI_CONF = True

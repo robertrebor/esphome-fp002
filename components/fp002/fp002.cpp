@@ -78,15 +78,34 @@ void Fp002Component::loop() {
   // Watchdog: if a command was sent but never got a REPLY, don't get stuck forever.
   if (this->pending_cmd_ != Fp002PendingCmd::NONE &&
       millis() - this->command_started_ms_ > this->command_timeout_ms_) {
-    ESP_LOGW(TAG, "Timed out waiting for a reply to command 0x%02X, giving up on it", this->pending_reply_mid_);
+    uint8_t timed_out_mid = this->pending_reply_mid_;
+    ESP_LOGW(TAG, "Timed out waiting for a reply to command 0x%02X, giving up on it", timed_out_mid);
     this->pending_cmd_ = Fp002PendingCmd::NONE;
     this->last_command_done_ms_ = millis();
+    // An enroll (single-frame or one step of an interactive enroll) that never got
+    // a reply would otherwise leave interactive_enroll_active_ stuck true forever,
+    // blocking auto_verify indefinitely - make sure it's reported as a failure.
+    if (timed_out_mid == MID_ENROLL || timed_out_mid == MID_ENROLL_SINGLE) {
+      this->interactive_enroll_active_ = false;
+      this->start_led_blinks_(FP002_LED_RED, 2);
+      this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
+    }
+  }
+
+  this->update_led_blinks_();
+
+  // Interactive enroll step sequencer: once any LED feedback for the previous
+  // direction has finished playing and nothing else is in flight, send the next
+  // direction. (The first direction is sent directly from enroll_user().)
+  if (this->interactive_enroll_active_ && !this->led_blink_active_ &&
+      this->pending_cmd_ == Fp002PendingCmd::NONE) {
+    this->send_enroll_step_();
   }
 
   // Auto-verify loop: as soon as the module is ready and idle (no enroll/delete/list
   // request in flight), (re)start listening for a face/palm.
   if (this->auto_verify_ && this->ready_ && this->pending_cmd_ == Fp002PendingCmd::NONE &&
-      millis() - this->last_command_done_ms_ > this->cooldown_ms_) {
+      !this->interactive_enroll_active_ && millis() - this->last_command_done_ms_ > this->cooldown_ms_) {
     this->start_verify();
   }
 }
@@ -118,18 +137,7 @@ void Fp002Component::append_name_(std::vector<uint8_t> &out, const std::string &
   out.insert(out.end(), buf, buf + sizeof(buf));
 }
 
-bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data, Fp002PendingCmd kind,
-                                    uint32_t timeout_ms) {
-  if (this->pending_cmd_ != Fp002PendingCmd::NONE) {
-    ESP_LOGW(TAG, "Module is busy (command 0x%02X in flight), ignoring new command 0x%02X", this->pending_reply_mid_,
-              mid);
-    return false;
-  }
-  if (!this->ready_ && mid != MID_RESET) {
-    ESP_LOGW(TAG, "Module is not ready yet, ignoring command 0x%02X", mid);
-    return false;
-  }
-
+void Fp002Component::write_frame_(uint8_t mid, const std::vector<uint8_t> &data) {
   uint16_t size = data.size();
   uint8_t checksum = mid;
   checksum ^= static_cast<uint8_t>(size >> 8);
@@ -145,12 +153,67 @@ bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data
   if (!data.empty())
     this->write_array(data.data(), data.size());
   this->write_byte(checksum);
+}
+
+bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data, Fp002PendingCmd kind,
+                                    uint32_t timeout_ms) {
+  if (this->pending_cmd_ != Fp002PendingCmd::NONE) {
+    ESP_LOGW(TAG, "Module is busy (command 0x%02X in flight), ignoring new command 0x%02X", this->pending_reply_mid_,
+              mid);
+    return false;
+  }
+  if (!this->ready_ && mid != MID_RESET) {
+    ESP_LOGW(TAG, "Module is not ready yet, ignoring command 0x%02X", mid);
+    return false;
+  }
+
+  this->write_frame_(mid, data);
 
   this->pending_cmd_ = kind;
   this->pending_reply_mid_ = mid;
   this->command_started_ms_ = millis();
   this->command_timeout_ms_ = timeout_ms;
   return true;
+}
+
+void Fp002Component::send_led_(uint8_t color, bool on) {
+  // Module's switch bit is inverted versus what you'd expect: 0x00 = on, 0x01 = off.
+  std::vector<uint8_t> data = {color, static_cast<uint8_t>(on ? 0x00 : 0x01)};
+  this->write_frame_(MID_LED_CONTROL, data);
+}
+
+void Fp002Component::start_led_blinks_(uint8_t color, uint8_t count) {
+  if (count == 0)
+    return;
+  this->led_blink_color_ = color;
+  this->led_blinks_target_ = count;
+  this->led_blinks_done_ = 0;
+  this->led_blink_active_ = true;
+  this->led_on_now_ = true;
+  this->send_led_(color, true);
+  this->led_next_toggle_ms_ = millis() + LED_BLINK_ON_MS;
+}
+
+void Fp002Component::update_led_blinks_() {
+  if (!this->led_blink_active_)
+    return;
+  if (millis() < this->led_next_toggle_ms_)
+    return;
+
+  if (this->led_on_now_) {
+    this->send_led_(this->led_blink_color_, false);
+    this->led_on_now_ = false;
+    this->led_blinks_done_++;
+    if (this->led_blinks_done_ >= this->led_blinks_target_) {
+      this->led_blink_active_ = false;
+      return;
+    }
+    this->led_next_toggle_ms_ = millis() + LED_BLINK_OFF_MS;
+  } else {
+    this->send_led_(this->led_blink_color_, true);
+    this->led_on_now_ = true;
+    this->led_next_toggle_ms_ = millis() + LED_BLINK_ON_MS;
+  }
 }
 
 void Fp002Component::start_verify() {
@@ -160,21 +223,66 @@ void Fp002Component::start_verify() {
                        (static_cast<uint32_t>(this->verify_timeout_) + 5) * 1000UL);
 }
 
-void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool palm_vein, uint8_t timeout) {
+void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool palm_vein, bool quick,
+                                  uint8_t timeout) {
   uint8_t use_timeout = timeout > 0 ? timeout : this->enroll_timeout_;
-  std::vector<uint8_t> data;
-  data.push_back(admin ? 1 : 0);
-  append_name_(data, user_name);
-  data.push_back(palm_vein ? 0xFD : 0x00);
-  data.push_back(use_timeout);
-
-  ESP_LOGI(TAG, "Enrolling new %s user '%s' (admin=%s, timeout=%us)", palm_vein ? "palm-vein" : "face",
-            user_name.c_str(), admin ? "yes" : "no", use_timeout);
-
   this->pending_enroll_name_ = user_name;
   this->pending_enroll_admin_ = admin;
-  this->send_command_(MID_ENROLL_SINGLE, data, Fp002PendingCmd::ENROLL,
-                       (static_cast<uint32_t>(use_timeout) + 5) * 1000UL);
+
+  // Palm vein has no interactive mode in the manual - it's always single-frame.
+  // `quick` opts a face enroll into single-frame too.
+  if (palm_vein || quick) {
+    std::vector<uint8_t> data;
+    data.push_back(admin ? 1 : 0);
+    append_name_(data, user_name);
+    data.push_back(palm_vein ? 0xFD : 0x00);
+    data.push_back(use_timeout);
+
+    ESP_LOGI(TAG, "Enrolling new %s user '%s' single-frame (admin=%s, timeout=%us)",
+              palm_vein ? "palm-vein" : "face", user_name.c_str(), admin ? "yes" : "no", use_timeout);
+
+    this->send_command_(MID_ENROLL_SINGLE, data, Fp002PendingCmd::ENROLL,
+                         (static_cast<uint32_t>(use_timeout) + 5) * 1000UL);
+    return;
+  }
+
+  // Interactive 5-direction enroll (the new default for face users): one
+  // MID_ENROLL command per direction, each waiting for its own REPLY, with a
+  // green LED blink after each captured direction and 3 blinks on completion.
+  ESP_LOGI(TAG, "Enrolling new face user '%s' interactively (admin=%s, %us/direction)", user_name.c_str(),
+            admin ? "yes" : "no", use_timeout);
+  this->interactive_enroll_active_ = true;
+  this->enroll_direction_index_ = 0;
+  this->enroll_step_timeout_s_ = use_timeout;
+  this->send_enroll_step_();
+}
+
+void Fp002Component::send_enroll_step_() {
+  static const uint8_t DIRECTIONS[NUM_ENROLL_DIRECTIONS] = {
+      FACE_DIRECTION_MIDDLE, FACE_DIRECTION_RIGHT, FACE_DIRECTION_LEFT, FACE_DIRECTION_DOWN, FACE_DIRECTION_UP,
+  };
+  static const char *const DIRECTION_NAMES[NUM_ENROLL_DIRECTIONS] = {"center", "right", "left", "down", "up"};
+
+  if (this->enroll_direction_index_ >= NUM_ENROLL_DIRECTIONS) {
+    // Shouldn't happen (the 5th successful REPLY carries a real user id and
+    // clears interactive_enroll_active_), but don't loop forever if it does.
+    ESP_LOGW(TAG, "Interactive enroll ran past 5 directions without finishing, aborting");
+    this->interactive_enroll_active_ = false;
+    this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
+    return;
+  }
+
+  uint8_t direction = DIRECTIONS[this->enroll_direction_index_];
+  std::vector<uint8_t> data;
+  data.push_back(this->pending_enroll_admin_ ? 1 : 0);
+  append_name_(data, this->pending_enroll_name_);
+  data.push_back(direction);
+  data.push_back(this->enroll_step_timeout_s_);
+
+  ESP_LOGD(TAG, "Interactive enroll: capture direction %u/5 (%s)", this->enroll_direction_index_ + 1,
+            DIRECTION_NAMES[this->enroll_direction_index_]);
+  this->send_command_(MID_ENROLL, data, Fp002PendingCmd::ENROLL,
+                       (static_cast<uint32_t>(this->enroll_step_timeout_s_) + 5) * 1000UL);
 }
 
 void Fp002Component::delete_user(uint16_t user_id, bool palm_vein) {
@@ -332,18 +440,58 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
       if (result == MR_SUCCESS) {
         ESP_LOGI(TAG, "Enrolled '%s' successfully as user id %u", this->pending_enroll_name_.c_str(), user_id);
+        this->start_led_blinks_(FP002_LED_GREEN, 3);
         this->enroll_success_callback_.call(user_id, this->pending_enroll_name_, this->pending_enroll_admin_);
         this->refresh_user_list(false);
       } else {
         ESP_LOGW(TAG, "Enroll of '%s' failed (result=0x%02X)", this->pending_enroll_name_.c_str(), result);
+        this->start_led_blinks_(FP002_LED_RED, 2);
         this->enroll_failed_callback_.call(result);
       }
     } else {
       this->pending_cmd_ = Fp002PendingCmd::NONE;
       this->last_command_done_ms_ = millis();
       ESP_LOGW(TAG, "Enroll reply too short (result=0x%02X)", result);
+      this->start_led_blinks_(FP002_LED_RED, 2);
       this->enroll_failed_callback_.call(result);
     }
+    return;
+  }
+
+  // MID_ENROLL - one direction of the interactive 5-direction enroll ---------
+  if (mid == MID_ENROLL) {
+    this->pending_cmd_ = Fp002PendingCmd::NONE;
+    this->last_command_done_ms_ = millis();
+
+    if (result != MR_SUCCESS || len < 3) {
+      ESP_LOGW(TAG, "Interactive enroll of '%s' failed on direction %u/5 (result=0x%02X)",
+                this->pending_enroll_name_.c_str(), this->enroll_direction_index_ + 1, result);
+      this->interactive_enroll_active_ = false;
+      this->start_led_blinks_(FP002_LED_RED, 2);
+      this->enroll_failed_callback_.call(result);
+      return;
+    }
+
+    uint16_t user_id = (static_cast<uint16_t>(data[0]) << 8) | data[1];
+    uint8_t face_bitmap = data[2];
+
+    if (user_id != 0xFFFF) {
+      // All 5 directions captured - the module just created the user.
+      ESP_LOGI(TAG, "Enrolled '%s' successfully as user id %u (interactive, bitmap=0x%02X)",
+                this->pending_enroll_name_.c_str(), user_id, face_bitmap);
+      this->interactive_enroll_active_ = false;
+      this->start_led_blinks_(FP002_LED_GREEN, 3);
+      this->enroll_success_callback_.call(user_id, this->pending_enroll_name_, this->pending_enroll_admin_);
+      this->refresh_user_list(false);
+      return;
+    }
+
+    // One more direction captured, more still to go - blink once, then the
+    // loop() step-sequencer sends the next direction once the blink is done.
+    ESP_LOGD(TAG, "Interactive enroll: direction %u/5 captured (bitmap=0x%02X)", this->enroll_direction_index_ + 1,
+              face_bitmap);
+    this->enroll_direction_index_++;
+    this->start_led_blinks_(FP002_LED_GREEN, 1);
     return;
   }
 
