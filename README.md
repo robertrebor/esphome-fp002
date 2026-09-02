@@ -61,6 +61,17 @@ for the old one-photo enroll instead - faster, but likely less robust.
 Palm-vein users always use the one-photo command, since the module has no
 interactive mode for palm vein.
 
+How to actually move your head for each direction (straight from the
+manual's section 4.2, "Face Orientation Parameters" - Figures 5-7):
+
+![How to position your face for each enroll direction: pitch up/down, yaw left/right, and don't roll/tilt your head sideways](docs/face-orientation.png)
+
+Pitch (nod) up/down and yaw (turn) left/right are both fine and expected -
+those are exactly the up/down/left/right directions the module asks for.
+Rolling/tilting your head sideways (last picture, the one with the red X) is
+what to avoid for *every* direction, including center - it throws off the
+angle detection regardless of which direction is currently being captured.
+
 ## Hardware
 
 - The module itself: search AliExpress for "FP002 facial recognition
@@ -144,6 +155,40 @@ Call them from a script, an automation, or a Lovelace button that calls a
 service. If you'd rather have plain `text` / `number` / `button` entities on
 a dashboard instead, there's a commented-out block at the bottom of
 `example.yaml` for that.
+
+## Enrolling a new user, step by step
+
+1. Position the module at face height, roughly **45-65cm** away (the
+   manual's optimal range for face registration - it'll work anywhere from
+   20-90cm, but closer to the optimum registers more reliably).
+2. In Home Assistant, go to **Developer Tools -> Actions**, find
+   `esphome.<device>_add_user`, and call it with `user_name` filled in,
+   `admin`/`palm_vein` as needed, and `quick` left `false` (the default) for
+   the more accurate interactive enroll.
+3. Have the person look straight at the module (center/front). The LED
+   blinks **green once** as soon as that direction is captured.
+4. One direction at a time - this component asks for them in the order
+   **center -> right -> left -> down -> up** - have the person slowly turn
+   or tilt their head into position (see the picture above) and **hold it
+   steady** for a moment. The manual is explicit about this: turn slowly and
+   hold the pose, don't snap back to center right away - the module needs a
+   moment to read the angle. Wait for the next green blink before moving on
+   to the next direction.
+5. Only pitch (nod up/down) and yaw (turn left/right) - never roll/tilt the
+   head sideways, for any of the 5 directions (the red-X picture above).
+6. After the 5th direction (up) is captured, the LED blinks **green 3x** and
+   the module assigns the new user their id - `on_enroll_success` fires
+   (check the log, or whatever automation you wired it to), and
+   `registered_user_ids` refreshes automatically so you can see the new id.
+7. If the LED instead blinks **red 2x**, something failed partway through
+   (moved too fast, bad lighting, one direction timed out) - check
+   `on_enroll_failed` / the log for the reason code. A failed attempt
+   doesn't leave anything partially registered, so just call `add_user`
+   again from the start.
+8. In a hurry, or enrolling a palm instead of a face? Call `add_user` with
+   `quick: true` (and/or `palm_vein: true`) for the old single-photo enroll
+   instead - one frontal photo, no multi-step dance, just somewhat less
+   robust for recognition afterwards.
 
 ## Design notes / known unknowns
 
