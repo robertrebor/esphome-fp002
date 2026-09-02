@@ -1,0 +1,168 @@
+# Example ESPHome configuration for the GROW FP002 facial/palm-vein module,
+# extended with add/delete user support callable directly from Home Assistant.
+#
+# Wiring (module -> ESP32):
+#   VCC (pin1)  -> external 5-12V supply (NOT the ESP32's 3.3V pin - check current draw, ~200mA)
+#   GND (pin2)  -> common ground with the ESP32
+#   TXD (pin3)  -> ESP32 RX pin  (GPIO16 below)
+#   RXD (pin4)  -> ESP32 TX pin  (GPIO17 below)
+#   IR  (pin5)  -> optional, not used by this component yet
+#   VCC (pin6)  -> 3-5V for the IR sensor, if you wire it up
+#
+# Place this repo's `components/fp002` folder next to this file (or point
+# `external_components.source.path` at wherever you keep it) before compiling.
+
+esphome:
+  name: fp002-face-recognition
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG   # use VERBOSE if you want to see the live face-position NOTE messages too
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  services:
+    # Call from HA: Developer Tools -> Actions -> ESPHome: <device> Add User
+    # (or `esphome.fp002_face_recognition_add_user` from an automation/script).
+    - service: add_user
+      variables:
+        user_name: string
+        admin: bool
+        palm_vein: bool
+      then:
+        - lambda: |-
+            id(fp002_module).enroll_user(user_name, admin, palm_vein);
+
+    - service: delete_user
+      variables:
+        user_id: int
+        palm_vein: bool
+      then:
+        - lambda: |-
+            id(fp002_module).delete_user((uint16_t) user_id, palm_vein);
+
+    # Careful - wipes every enrolled user. type: 0=all, 1=face only, 2=palm only, 3=general.
+    - service: delete_all_users
+      variables:
+        type: int
+      then:
+        - lambda: |-
+            id(fp002_module).delete_all_users((uint8_t) type);
+
+ota:
+  platform: esphome
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [fp002]
+
+uart:
+  id: fp002_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 115200
+
+fp002:
+  id: fp002_module
+  uart_id: fp002_uart
+  auto_verify: true       # keep re-issuing MID_VERIFY so recognition runs continuously
+  verify_timeout: 5       # seconds the module waits for a face per verify attempt (max 255)
+  enroll_timeout: 15      # seconds the module waits for a face per enroll attempt (max 255)
+  cooldown: 2s            # pause between attempts
+
+  # --- entities, remove any you don't want ---
+  face_recognized_binary_sensor:
+    name: "Face Recognized"
+  recognized_user_name:
+    name: "Recognized User Name"
+  recognized_user_id:
+    name: "Recognized User Id"
+  registered_user_ids:
+    name: "Registered User Ids"      # comma-separated list, e.g. "1,4,9,10"
+  registered_user_count:
+    name: "Registered User Count"
+
+  # --- automations ---
+  on_ready:
+    - logger.log: "FP002 module is ready"
+  on_face_recognized:
+    - logger.log:
+        format: "Recognized user %u (%s), admin=%d"
+        args: ["user_id", "user_name.c_str()", "admin"]
+    # Example for later, once you decide on an action:
+    # - switch.turn_on: door_relay
+  on_face_rejected:
+    - logger.log:
+        format: "Verify attempt finished without a match (reason=0x%02X)"
+        args: ["reason"]
+
+  on_enroll_success:
+    - logger.log:
+        format: "Enrolled new user %u: %s (admin=%d)"
+        args: ["user_id", "user_name.c_str()", "admin"]
+  on_enroll_failed:
+    - logger.log:
+        format: "Enroll failed (reason=0x%02X)"
+        args: ["reason"]
+
+  on_delete_success:
+    - logger.log:
+        format: "Deleted user %u"
+        args: ["user_id"]
+  on_delete_failed:
+    - logger.log:
+        format: "Delete of user %u failed (reason=0x%02X)"
+        args: ["user_id", "reason"]
+  on_delete_all_success:
+    - logger.log: "All matching users deleted"
+
+# You can also call these from any other automation/lambda, e.g. a physical
+# button on the ESP32 itself, without going through a Home Assistant service:
+#   id(fp002_module).start_verify();
+#   id(fp002_module).enroll_user("Robert", false, false);   // name, admin, palm_vein
+#   id(fp002_module).delete_user(4, false);                 // user_id, palm_vein
+#   id(fp002_module).delete_all_users(0);                   // 0=all
+#   id(fp002_module).refresh_user_list();
+#   id(fp002_module).reset_module();
+
+# --- Optional: no-YAML dashboard controls instead of/alongside the HA services above ---
+# Uncomment this block if you'd rather add/delete users by typing into a text
+# box and pressing a button on a Lovelace dashboard than by calling a service.
+#
+# text:
+#   - platform: template
+#     name: "New User Name"
+#     id: new_user_name
+#     mode: text
+#     optimistic: true
+#
+# number:
+#   - platform: template
+#     name: "Delete User Id"
+#     id: delete_user_id_number
+#     min_value: 1
+#     max_value: 800
+#     step: 1
+#     mode: box
+#     optimistic: true
+#
+# button:
+#   - platform: template
+#     name: "Enroll New Face"
+#     on_press:
+#       - lambda: |-
+#           id(fp002_module).enroll_user(id(new_user_name).state, false, false);
+#   - platform: template
+#     name: "Delete User By Id"
+#     on_press:
+#       - lambda: |-
+#           id(fp002_module).delete_user((uint16_t) id(delete_user_id_number).state, false);
