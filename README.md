@@ -206,6 +206,47 @@ angle detection regardless of which direction is currently being captured.
    Enroll** and/or **New User Is Palm Vein** on before pressing **Enroll New
    User** for the old single-photo enroll instead - one frontal photo, no
    multi-step dance, just somewhat less robust for recognition afterwards.
+   For a palm, see the next section.
+
+## Enrolling a palm (palm vein), step by step
+
+Palm vein recognition reads the vein pattern under the skin of your palm
+with the module's near-infrared camera, so it works at a much shorter
+distance than a face. The steps below follow the manufacturer's manual
+(sections 1.2 and 5.4.2) - they haven't been verified on real hardware yet,
+reports welcome.
+
+1. Have the hand ready about **15-20cm** in front of the module (the
+   manual's palm registration distance; recognition later works at
+   10-20cm).
+2. In Home Assistant, on the FP002 device page, type the person's name into
+   **New User Name**, flip **New User Is Palm Vein** on (and **New User Is
+   Admin** if needed), then press **Enroll New User**. The **New User Quick
+   Enroll** switch doesn't matter here - palm vein is always a single-frame
+   enroll, the module has no interactive mode for it.
+3. Hold the palm facing the module, fingers naturally spread, directly in
+   front of the camera. Move it **slowly back and forth** (towards the module
+   and away from it) until the enroll completes. The module waits up to
+   `enroll_timeout` seconds (15 by default) for a usable palm.
+4. There are no per-direction blinks for a palm: the LED blinks **green 3x**
+   on success or **red 2x** on failure, and `on_enroll_success` /
+   `on_enroll_failed` fire the same way as for a face.
+5. Palm users get ids from **501 to 800** (300 users max), separate from face
+   ids (1-500). The new id is in the log and in the `user_id` argument of
+   `on_enroll_success`.
+6. Turn **New User Is Palm Vein** back off before enrolling a face again.
+7. To delete a palm user, set **Delete User Id** to its id (501+), flip
+   **Delete User Is Palm Vein** on and press **Delete User By Id** (see
+   "Design notes" below for why this is the one spot worth checking with
+   `logger: level: VERBOSE`).
+
+Recognition needs no extra setup: the same background verify that matches
+faces also matches palms, and the result shows up in the same **Recognized
+User Name** / **Recognized User Id** entities.
+
+**Limitation:** **Registered User Ids** / **Registered User Count** currently
+list face users only - palm users are stored in the module and recognized
+normally, they just don't appear in those two entities.
 
 ## Design notes / known unknowns
 
