@@ -1,0 +1,112 @@
+# Home Assistant dashboard card for the FP002 face / palm-vein module.
+#
+# Built only from standard Home Assistant cards - no HACS or custom frontend
+# resources needed. Add it to a dashboard: Edit dashboard -> Add card ->
+# Manual, and paste this whole file.
+#
+# Entity ids assume the device is named `fp002-face-recognition` and the
+# entity names from example.yaml. If you renamed the device, search/replace
+# `fp002_face_recognition` with your device name (dashes become underscores).
+
+type: vertical-stack
+cards:
+  - type: heading
+    heading: Face recognition
+    icon: mdi:face-recognition
+    badges:
+      - type: entity
+        entity: binary_sensor.fp002_face_recognition_module_ready
+        show_state: true
+        color: green
+
+  # --- Last recognition -------------------------------------------------------
+  - type: horizontal-stack
+    cards:
+      - type: tile
+        entity: sensor.fp002_face_recognition_recognized_user_name
+        name: Last recognized
+        icon: mdi:account-check
+        vertical: true
+      - type: tile
+        entity: binary_sensor.fp002_face_recognition_face_recognized
+        name: Recognized now
+        vertical: true
+      - type: tile
+        entity: sensor.fp002_face_recognition_registered_user_count
+        name: Users
+        vertical: true
+
+  # --- Enroll new user ----------------------------------------------------------
+  - type: entities
+    title: Enroll new user
+    state_color: true
+    entities:
+      - entity: text.fp002_face_recognition_new_user_name
+        name: Name
+      - entity: switch.fp002_face_recognition_new_user_is_admin
+        name: Admin
+      - entity: switch.fp002_face_recognition_new_user_is_palm_vein
+        name: Palm vein
+      - entity: switch.fp002_face_recognition_new_user_quick_enroll_single_photo
+        name: Quick (single photo)
+      - type: button
+        name: Start enroll
+        icon: mdi:account-plus
+        action_name: Start
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.fp002_face_recognition_enroll_new_user
+      - type: divider
+      - entity: sensor.fp002_face_recognition_enroll_status
+        name: Status
+      - entity: sensor.fp002_face_recognition_enroll_progress
+        name: Directions captured (of 5)
+
+  # --- Manage users -------------------------------------------------------------
+  - type: entities
+    title: Registered users
+    entities:
+      - entity: sensor.fp002_face_recognition_registered_user_ids
+        name: Face user ids
+      - type: divider
+      - entity: number.fp002_face_recognition_delete_user_id
+        name: User id to delete
+      - entity: switch.fp002_face_recognition_delete_user_is_palm_vein
+        name: Palm-vein user
+      - type: button
+        name: Delete user
+        icon: mdi:account-remove
+        action_name: Delete
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.fp002_face_recognition_delete_user_by_id
+          confirmation:
+            text: Delete the selected user?
+      - type: divider
+      - entity: select.fp002_face_recognition_delete_all_users_which
+        name: Delete all
+      - type: button
+        name: Delete all users
+        icon: mdi:account-multiple-remove
+        action_name: Delete all
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.fp002_face_recognition_delete_all_users
+          confirmation:
+            text: Delete ALL users of the selected type? This cannot be undone.
+
+  # --- Event log ------------------------------------------------------------------
+  - type: logbook
+    title: Events
+    hours_to_show: 48
+    target:
+      entity_id:
+        - sensor.fp002_face_recognition_last_event
+        - sensor.fp002_face_recognition_recognized_user_name
+        - binary_sensor.fp002_face_recognition_module_ready

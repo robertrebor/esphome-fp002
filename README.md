@@ -49,6 +49,9 @@ very welcome, that's the point of this thread.
 - A `registered_user_ids` / `registered_user_count` sensor pair, auto
   refreshed after boot and after every enroll/delete, so you can actually
   see which id to delete.
+- Status and event entities (module ready, enroll status/progress, last
+  event), a **custom web dashboard** served by the device itself, and a ready
+  made **Home Assistant dashboard card** - see below.
 
 Enrollment defaults to the module's **interactive 5-direction enroll**
 (`MID_ENROLL`: center, right, left, down, up) rather than a single photo, for
@@ -91,7 +94,7 @@ Add this repo as an external component in your ESPHome YAML:
 
 ```yaml
 external_components:
-  - source: github://robertrebor/esphome-fp002@v1.0.2
+  - source: github://robertrebor/esphome-fp002@v1.1.0
     components: [fp002]
 ```
 
@@ -127,6 +130,80 @@ fp002:
         format: "Recognized user %u (%s)"
         args: ["user_id", "user_name.c_str()"]
 ```
+
+## Status and event entities
+
+Optional entities that show what the module is doing - the web dashboard and
+the Home Assistant card below are built on them, but they're useful on their
+own too:
+
+```yaml
+fp002:
+  # ...
+  module_ready:
+    name: "Module Ready"      # binary_sensor, on once the module answers over UART
+  enroll_status:
+    name: "Enroll Status"     # text, e.g. "Step 3/5: face left", "Done: name (ID 5)", "Failed: timeout"
+  enroll_progress:
+    name: "Enroll Progress"   # number of captured directions during an interactive enroll, 0-5
+  last_event:
+    name: "Last Event"        # text, e.g. "Recognized: name (ID 4)", "Rejected: not recognized (timeout)"
+```
+
+`last_event` is deliberately quiet: a recognition is reported once when the
+person changes or comes back, not on every verify cycle while they keep
+standing in front of the module, and a rejection only when the module
+actually saw a face or palm - an empty scene timing out every few seconds is
+not logged. Other events: enrolled, enroll failed, deleted, delete failed,
+bulk delete, module ready / module restarted.
+
+## Web dashboard
+
+`example.yaml` enables a custom page on the device itself, at
+`http://<device-ip>/`, replacing the default ESPHome entity list:
+
+- module and connection status,
+- last recognized user,
+- enroll form with live 5-direction progress (center / right / left / down /
+  up) and hints for the person being enrolled,
+- registered user ids (click one to select it for deletion), delete by id and
+  delete all with a confirmation prompt,
+- event log since the page was opened.
+
+```yaml
+web_server:
+  version: 3
+  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.1.0/web/fp002-ui.js"
+```
+
+The page is a single script, [`web/fp002-ui.js`](web/fp002-ui.js), that uses
+only the standard ESPHome web server API (live updates over `/events`,
+commands as `POST /<domain>/<entity name>/<action>`), so all logic stays on
+the ESP32. With `js_url` the browser downloads the script from jsDelivr (the
+default ESPHome page does the same from esphome.io). To keep the device fully
+offline, copy `web/fp002-ui.js` next to your YAML and embed it in the
+firmware instead:
+
+```yaml
+web_server:
+  version: 3
+  js_url: ""
+  js_include: "fp002-ui.js"
+```
+
+It expects the entity names from `example.yaml`; if you rename entities,
+adjust the `ENTITIES` table at the top of the script. Entities you didn't
+configure are simply hidden.
+
+## Home Assistant dashboard card
+
+[`ha/dashboard-card.yaml`](ha/dashboard-card.yaml) is the same overview as a
+Home Assistant card, built only from standard cards (no HACS needed): module
+status, last recognition, enroll form with status, user management with
+confirmation on delete, and an event log. In a dashboard: **Edit dashboard ->
+Add card -> Manual**, paste the file. It assumes the device is named
+`fp002-face-recognition`; otherwise search/replace `fp002_face_recognition`
+with your device name.
 
 ## Managing users as device entities (recommended)
 

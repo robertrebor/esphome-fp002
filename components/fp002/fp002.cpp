@@ -11,6 +11,11 @@ void Fp002Component::setup() {
   // The module takes ~250ms to boot and then sends an unsolicited NOTE
   // (NID_READY) once it is able to accept commands - nothing to send here.
   ESP_LOGCONFIG(TAG, "Setting up FP002, waiting for module ready notification...");
+#ifdef USE_BINARY_SENSOR
+  if (this->module_ready_binary_sensor_ != nullptr)
+    this->module_ready_binary_sensor_->publish_state(false);
+#endif
+  this->publish_enroll_status_("Idle", 0);
 }
 
 void Fp002Component::loop() {
@@ -88,6 +93,8 @@ void Fp002Component::loop() {
     if (timed_out_mid == MID_ENROLL || timed_out_mid == MID_ENROLL_SINGLE) {
       this->interactive_enroll_active_ = false;
       this->start_led_blinks_(FP002_LED_RED, 2);
+      this->publish_enroll_status_("Failed: no reply from module", 0);
+      this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: no reply from module");
       this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
     }
   }
@@ -136,14 +143,18 @@ void Fp002Component::dump_config() {
   this->check_uart_settings(115200);
 #ifdef USE_BINARY_SENSOR
   LOG_BINARY_SENSOR("  ", "Face Recognized", this->face_recognized_binary_sensor_);
+  LOG_BINARY_SENSOR("  ", "Module Ready", this->module_ready_binary_sensor_);
 #endif
 #ifdef USE_TEXT_SENSOR
   LOG_TEXT_SENSOR("  ", "Recognized User Name", this->recognized_user_name_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Registered User Ids", this->registered_user_ids_text_sensor_);
+  LOG_TEXT_SENSOR("  ", "Enroll Status", this->enroll_status_text_sensor_);
+  LOG_TEXT_SENSOR("  ", "Last Event", this->last_event_text_sensor_);
 #endif
 #ifdef USE_SENSOR
   LOG_SENSOR("  ", "Recognized User Id", this->recognized_user_id_sensor_);
   LOG_SENSOR("  ", "Registered User Count", this->registered_user_count_sensor_);
+  LOG_SENSOR("  ", "Enroll Progress", this->enroll_progress_sensor_);
 #endif
 }
 
@@ -265,8 +276,9 @@ void Fp002Component::update_led_blinks_() {
 void Fp002Component::start_verify() {
   std::vector<uint8_t> data = {0x00, this->verify_timeout_};  // pd_rightaway (deprecated), timeout
   ESP_LOGV(TAG, "Sending MID_VERIFY (timeout=%us)", this->verify_timeout_);
-  this->send_command_(MID_VERIFY, data, Fp002PendingCmd::VERIFY,
-                       (static_cast<uint32_t>(this->verify_timeout_) + 5) * 1000UL);
+  if (this->send_command_(MID_VERIFY, data, Fp002PendingCmd::VERIFY,
+                          (static_cast<uint32_t>(this->verify_timeout_) + 5) * 1000UL))
+    this->verify_face_seen_ = false;
 }
 
 void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool palm_vein, bool quick,
@@ -287,6 +299,7 @@ void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool 
     ESP_LOGI(TAG, "Enrolling new %s user '%s' single-frame (admin=%s, timeout=%us)",
               palm_vein ? "palm-vein" : "face", user_name.c_str(), admin ? "yes" : "no", use_timeout);
 
+    this->publish_enroll_status_(palm_vein ? "Waiting for palm" : "Waiting for face (single photo)", 0);
     this->send_command_(MID_ENROLL_SINGLE, data, Fp002PendingCmd::ENROLL,
                          (static_cast<uint32_t>(use_timeout) + 5) * 1000UL);
     return;
@@ -314,6 +327,7 @@ void Fp002Component::send_enroll_step_() {
     // clears interactive_enroll_active_), but don't loop forever if it does.
     ESP_LOGW(TAG, "Interactive enroll ran past 5 directions without finishing, aborting");
     this->interactive_enroll_active_ = false;
+    this->publish_enroll_status_("Failed: enroll did not finish", 0);
     this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
     return;
   }
@@ -327,6 +341,9 @@ void Fp002Component::send_enroll_step_() {
 
   ESP_LOGD(TAG, "Interactive enroll: capture direction %u/5 (%s)", this->enroll_direction_index_ + 1,
             DIRECTION_NAMES[this->enroll_direction_index_]);
+  this->publish_enroll_status_(std::string("Step ") + std::to_string(this->enroll_direction_index_ + 1) +
+                                   "/5: face " + DIRECTION_NAMES[this->enroll_direction_index_],
+                               this->enroll_direction_index_);
   this->send_command_(MID_ENROLL, data, Fp002PendingCmd::ENROLL,
                        (static_cast<uint32_t>(this->enroll_step_timeout_s_) + 5) * 1000UL);
 }
@@ -346,12 +363,14 @@ void Fp002Component::delete_user(uint16_t user_id, bool palm_vein) {
 
 void Fp002Component::delete_all_users(uint8_t type) {
   ESP_LOGI(TAG, "Deleting users (type=%u: 0=all,1=face,2=palm,3=general)", type);
+  this->pending_delete_all_type_ = type;
   std::vector<uint8_t> data = {type, 0, 0, 0, 0};
   this->send_command_(MID_DELALL, data, Fp002PendingCmd::DELETE_ALL, 3000);
 }
 
 void Fp002Component::delete_user_range(uint16_t begin_id, uint16_t end_id) {
   ESP_LOGI(TAG, "Deleting users in range [%u, %u]", begin_id, end_id);
+  this->pending_delete_all_type_ = 4;
   std::vector<uint8_t> data = {
       4,  // type = 4: range delete
       static_cast<uint8_t>(begin_id >> 8),
@@ -373,6 +392,60 @@ void Fp002Component::reset_module() {
   this->pending_cmd_ = Fp002PendingCmd::NONE;  // abandon whatever we were waiting on
   this->queued_ = QueuedCommand{};
   this->send_command_(MID_RESET, {}, Fp002PendingCmd::RESET, 2000);
+}
+
+void Fp002Component::publish_event_(const std::string &event) {
+  ESP_LOGD(TAG, "Event: %s", event.c_str());
+#ifdef USE_TEXT_SENSOR
+  if (this->last_event_text_sensor_ != nullptr)
+    this->last_event_text_sensor_->publish_state(event);
+#endif
+}
+
+void Fp002Component::publish_enroll_status_(const std::string &status, int progress) {
+#ifdef USE_TEXT_SENSOR
+  if (this->enroll_status_text_sensor_ != nullptr)
+    this->enroll_status_text_sensor_->publish_state(status);
+#endif
+#ifdef USE_SENSOR
+  if (progress >= 0 && this->enroll_progress_sensor_ != nullptr)
+    this->enroll_progress_sensor_->publish_state(progress);
+#endif
+}
+
+const char *Fp002Component::result_name_(uint8_t result) {
+  switch (result) {
+    case 0x00:
+      return "success";
+    case 0x01:
+      return "rejected by module";
+    case 0x02:
+      return "aborted";
+    case 0x04:
+      return "camera failed";
+    case 0x05:
+      return "unknown error";
+    case 0x06:
+      return "invalid parameter";
+    case 0x07:
+      return "out of memory";
+    case 0x08:
+      return "unknown user";
+    case 0x09:
+      return "user limit reached";
+    case 0x0A:
+      return "face already enrolled";
+    case 0x0C:
+      return "liveness check failed";
+    case 0x0D:
+      return "timeout";
+    case 0xEF:
+      return "palm not recognized";
+    case 0xF1:
+      return "palm already enrolled";
+    default:
+      return "error";
+  }
 }
 
 void Fp002Component::handle_frame_() {
@@ -397,7 +470,14 @@ void Fp002Component::handle_frame_() {
 }
 
 void Fp002Component::mark_ready_() {
+  bool was_ready = this->ready_;
   this->ready_ = true;
+#ifdef USE_BINARY_SENSOR
+  if (this->module_ready_binary_sensor_ != nullptr)
+    this->module_ready_binary_sensor_->publish_state(true);
+#endif
+  // A second NID_READY after we were already ready means the module itself rebooted.
+  this->publish_event_(was_ready ? "Module restarted" : "Module ready");
   this->last_command_done_ms_ = millis();
   this->ready_callback_.call();
   this->refresh_user_list(false);  // populate the registered-user list right away
@@ -413,6 +493,13 @@ void Fp002Component::handle_note_(uint8_t nid, const uint8_t *data, size_t len) 
     case NID_FACE_STATE:
       if (len >= 1) {
         ESP_LOGV(TAG, "Face/palm state update: 0x%02X", data[0]);
+      }
+      if (len >= 2) {
+        // state is an int16_t (s_note_data_face, manual 3.2.2); all defined values
+        // are < 256, so OR-ing both bytes reads it regardless of byte order.
+        int16_t state = static_cast<int16_t>(data[0] | data[1]);
+        if (state != FACE_STATE_NOFACE)
+          this->verify_face_seen_ = true;
       }
       break;
     case NID_EYE_STATE:
@@ -467,6 +554,11 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       if (this->recognized_user_id_sensor_ != nullptr)
         this->recognized_user_id_sensor_->publish_state(user_id);
 #endif
+      if (!this->last_verify_matched_ || this->last_recognized_id_ != user_id) {
+        this->publish_event_("Recognized: " + user_name + " (ID " + std::to_string(user_id) + ")");
+      }
+      this->last_verify_matched_ = true;
+      this->last_recognized_id_ = user_id;
       this->face_recognized_callback_.call(user_id, user_name, admin);
     } else {
       ESP_LOGD(TAG, "Verify finished without a match (result=0x%02X)", result);
@@ -474,6 +566,10 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       if (this->face_recognized_binary_sensor_ != nullptr)
         this->face_recognized_binary_sensor_->publish_state(false);
 #endif
+      if (this->verify_face_seen_ || result == MR_FAILED4_LIVENESSCHECK || result == MR_FAILED4_UNKNOWN_HANDUSER) {
+        this->publish_event_(std::string("Rejected: not recognized (") + result_name_(result) + ")");
+      }
+      this->last_verify_matched_ = false;
       this->face_rejected_callback_.call(result);
     }
     return;
@@ -497,11 +593,16 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       if (result == MR_SUCCESS) {
         ESP_LOGI(TAG, "Enrolled '%s' successfully as user id %u", this->pending_enroll_name_.c_str(), user_id);
         this->start_led_blinks_(FP002_LED_GREEN, 3);
+        this->publish_enroll_status_("Done: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")",
+                                     NUM_ENROLL_DIRECTIONS);
+        this->publish_event_("Enrolled: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")");
         this->enroll_success_callback_.call(user_id, this->pending_enroll_name_, this->pending_enroll_admin_);
         this->refresh_user_list(false);
       } else {
         ESP_LOGW(TAG, "Enroll of '%s' failed (result=0x%02X)", this->pending_enroll_name_.c_str(), result);
         this->start_led_blinks_(FP002_LED_RED, 2);
+        this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
+        this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
         this->enroll_failed_callback_.call(result);
       }
     } else {
@@ -509,6 +610,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       this->last_command_done_ms_ = millis();
       ESP_LOGW(TAG, "Enroll reply too short (result=0x%02X)", result);
       this->start_led_blinks_(FP002_LED_RED, 2);
+      this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
+      this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
       this->enroll_failed_callback_.call(result);
     }
     return;
@@ -524,6 +627,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
                 this->pending_enroll_name_.c_str(), this->enroll_direction_index_ + 1, result);
       this->interactive_enroll_active_ = false;
       this->start_led_blinks_(FP002_LED_RED, 2);
+      this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
+      this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
       this->enroll_failed_callback_.call(result);
       return;
     }
@@ -537,6 +642,9 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
                 this->pending_enroll_name_.c_str(), user_id, face_bitmap);
       this->interactive_enroll_active_ = false;
       this->start_led_blinks_(FP002_LED_GREEN, 3);
+      this->publish_enroll_status_("Done: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")",
+                                   NUM_ENROLL_DIRECTIONS);
+      this->publish_event_("Enrolled: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")");
       this->enroll_success_callback_.call(user_id, this->pending_enroll_name_, this->pending_enroll_admin_);
       this->refresh_user_list(false);
       return;
@@ -547,6 +655,10 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
     ESP_LOGD(TAG, "Interactive enroll: direction %u/5 captured (bitmap=0x%02X)", this->enroll_direction_index_ + 1,
               face_bitmap);
     this->enroll_direction_index_++;
+#ifdef USE_SENSOR
+    if (this->enroll_progress_sensor_ != nullptr)
+      this->enroll_progress_sensor_->publish_state(this->enroll_direction_index_);
+#endif
     this->start_led_blinks_(FP002_LED_GREEN, 1);
     return;
   }
@@ -558,10 +670,13 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
     if (result == MR_SUCCESS) {
       ESP_LOGI(TAG, "Deleted user id %u", this->pending_delete_user_id_);
+      this->publish_event_("Deleted user ID " + std::to_string(this->pending_delete_user_id_));
       this->delete_success_callback_.call(this->pending_delete_user_id_);
       this->refresh_user_list(false);
     } else {
       ESP_LOGW(TAG, "Delete of user id %u failed (result=0x%02X)", this->pending_delete_user_id_, result);
+      this->publish_event_("Delete of user ID " + std::to_string(this->pending_delete_user_id_) +
+                           " failed: " + result_name_(result));
       this->delete_failed_callback_.call(this->pending_delete_user_id_, result);
     }
     return;
@@ -574,10 +689,15 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
     if (result == MR_SUCCESS) {
       ESP_LOGI(TAG, "Bulk delete completed");
+      static const char *const TYPE_NAMES[] = {"all users", "all face users", "all palm-vein users",
+                                               "all general users", "a range of users"};
+      this->publish_event_(std::string("Deleted ") +
+                           TYPE_NAMES[this->pending_delete_all_type_ <= 4 ? this->pending_delete_all_type_ : 0]);
       this->delete_all_success_callback_.call();
       this->refresh_user_list(false);
     } else {
       ESP_LOGW(TAG, "Bulk delete failed (result=0x%02X)", result);
+      this->publish_event_(std::string("Bulk delete failed: ") + result_name_(result));
       this->delete_failed_callback_.call(0, result);
     }
     return;

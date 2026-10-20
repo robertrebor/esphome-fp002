@@ -72,8 +72,18 @@ api:
 ota:
   platform: esphome
 
+# Custom dashboard on http://<device-ip>/ (status, enrollment with live
+# progress, user management, event log) instead of the default ESPHome entity
+# list - see README "Web dashboard". The browser loads the page script from
+# jsDelivr; for a fully offline device put web/fp002-ui.js next to this file
+# and use `js_url: ""` + `js_include: "fp002-ui.js"` instead. Remove the whole
+# block if you don't want a web server on the device.
+web_server:
+  version: 3
+  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.1.0/web/fp002-ui.js"
+
 external_components:
-  - source: github://robertrebor/esphome-fp002@v1.0.2
+  - source: github://robertrebor/esphome-fp002@v1.1.0
     components: [fp002]
 
 uart:
@@ -101,6 +111,14 @@ fp002:
     name: "Registered User Ids"      # comma-separated list, e.g. "1,4,9,10"
   registered_user_count:
     name: "Registered User Count"
+  module_ready:
+    name: "Module Ready"               # true once the module answers over UART
+  enroll_status:
+    name: "Enroll Status"              # e.g. "Step 3/5: face left", "Done: name (ID 5)"
+  enroll_progress:
+    name: "Enroll Progress"            # captured directions during interactive enroll, 0-5
+  last_event:
+    name: "Last Event"                 # recognized / rejected / enrolled / deleted ...
 
   # --- automations ---
   on_ready:

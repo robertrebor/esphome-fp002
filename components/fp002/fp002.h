@@ -53,6 +53,11 @@ static const uint8_t NID_EYE_STATE = 0x04;
 // Result codes
 static const uint8_t MR_SUCCESS = 0x00;
 static const uint8_t MR_FAILED4_TIMEOUT = 0x0D;  // used as our own host-side watchdog result too
+static const uint8_t MR_FAILED4_LIVENESSCHECK = 0x0C;
+static const uint8_t MR_FAILED4_UNKNOWN_HANDUSER = 0xEF;  // palm vein verification failed
+
+// NID_FACE_STATE state value meaning "nothing in front of the camera"
+static const int16_t FACE_STATE_NOFACE = 1;
 
 // MID_GETSTATUS status byte
 static const uint8_t MS_STANDBY = 0x00;
@@ -102,6 +107,7 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void set_face_recognized_binary_sensor(binary_sensor::BinarySensor *bs) {
     this->face_recognized_binary_sensor_ = bs;
   }
+  void set_module_ready_binary_sensor(binary_sensor::BinarySensor *bs) { this->module_ready_binary_sensor_ = bs; }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_recognized_user_name_text_sensor(text_sensor::TextSensor *ts) {
@@ -110,10 +116,13 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void set_registered_user_ids_text_sensor(text_sensor::TextSensor *ts) {
     this->registered_user_ids_text_sensor_ = ts;
   }
+  void set_enroll_status_text_sensor(text_sensor::TextSensor *ts) { this->enroll_status_text_sensor_ = ts; }
+  void set_last_event_text_sensor(text_sensor::TextSensor *ts) { this->last_event_text_sensor_ = ts; }
 #endif
 #ifdef USE_SENSOR
   void set_recognized_user_id_sensor(sensor::Sensor *s) { this->recognized_user_id_sensor_ = s; }
   void set_registered_user_count_sensor(sensor::Sensor *s) { this->registered_user_count_sensor_ = s; }
+  void set_enroll_progress_sensor(sensor::Sensor *s) { this->enroll_progress_sensor_ = s; }
 #endif
 
   void add_on_ready_callback(std::function<void()> &&cb) { this->ready_callback_.add(std::move(cb)); }
@@ -216,6 +225,17 @@ class Fp002Component : public Component, public uart::UARTDevice {
   // restarts (OTA, reset button) while the module stays powered, it never comes,
   // so we probe with MID_GETSTATUS until the module answers.
   uint32_t last_ready_probe_ms_{0};
+
+  // Event/status reporting (module_ready, enroll_status, enroll_progress,
+  // last_event entities). A "recognized" event is only reported when the person
+  // changes or comes back after a failed attempt, not on every verify cycle while
+  // they keep standing in front of the module; a "rejected" event only when the
+  // module actually saw a face/palm during that verify (NID_FACE_STATE), so an
+  // empty scene timing out every few seconds doesn't flood the log.
+  bool verify_face_seen_{false};
+  bool last_verify_matched_{false};
+  uint16_t last_recognized_id_{0};
+  uint8_t pending_delete_all_type_{0};
   static const uint32_t READY_PROBE_INTERVAL_MS = 3000;
 
   // Context carried from the request to when its REPLY arrives.
@@ -259,6 +279,13 @@ class Fp002Component : public Component, public uart::UARTDevice {
   /// Abort a background MID_VERIFY with MID_RESET (used when a queued command is waiting).
   void abort_verify_();
 
+  /// Publish a human-readable line to the last_event text sensor (and the log).
+  void publish_event_(const std::string &event);
+  /// Update the enroll_status text sensor and, if progress >= 0, enroll_progress.
+  void publish_enroll_status_(const std::string &status, int progress = -1);
+  /// Short English name for a module result code (MR_... table, manual 3.2.1).
+  static const char *result_name_(uint8_t result);
+
   /// Low-level frame writer (sync word, mid, size, data, checksum) - shared by
   /// send_command_() and send_led_(). Does not touch pending_cmd_ tracking.
   void write_frame_(uint8_t mid, const std::vector<uint8_t> &data);
@@ -282,14 +309,18 @@ class Fp002Component : public Component, public uart::UARTDevice {
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *face_recognized_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *module_ready_binary_sensor_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *recognized_user_name_text_sensor_{nullptr};
   text_sensor::TextSensor *registered_user_ids_text_sensor_{nullptr};
+  text_sensor::TextSensor *enroll_status_text_sensor_{nullptr};
+  text_sensor::TextSensor *last_event_text_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *recognized_user_id_sensor_{nullptr};
   sensor::Sensor *registered_user_count_sensor_{nullptr};
+  sensor::Sensor *enroll_progress_sensor_{nullptr};
 #endif
 
   CallbackManager<void()> ready_callback_;

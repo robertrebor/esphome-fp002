@@ -2,7 +2,12 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
 from esphome.components import uart, binary_sensor, text_sensor, sensor
-from esphome.const import CONF_ID, CONF_TRIGGER_ID
+from esphome.const import (
+    CONF_ID,
+    CONF_TRIGGER_ID,
+    DEVICE_CLASS_CONNECTIVITY,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+)
 
 CODEOWNERS = ["@robertrebor"]
 DEPENDENCIES = ["uart"]
@@ -44,6 +49,10 @@ CONF_RECOGNIZED_USER_NAME = "recognized_user_name"
 CONF_RECOGNIZED_USER_ID = "recognized_user_id"
 CONF_REGISTERED_USER_IDS = "registered_user_ids"
 CONF_REGISTERED_USER_COUNT = "registered_user_count"
+CONF_MODULE_READY = "module_ready"
+CONF_ENROLL_STATUS = "enroll_status"
+CONF_ENROLL_PROGRESS = "enroll_progress"
+CONF_LAST_EVENT = "last_event"
 CONF_ON_READY = "on_ready"
 CONF_ON_FACE_RECOGNIZED = "on_face_recognized"
 CONF_ON_FACE_REJECTED = "on_face_rejected"
@@ -79,6 +88,24 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_REGISTERED_USER_COUNT): sensor.sensor_schema(
                 icon="mdi:account-multiple",
                 accuracy_decimals=0,
+            ),
+            # True once the module has answered (NID_READY or status probe).
+            cv.Optional(CONF_MODULE_READY): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_CONNECTIVITY,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            # Human-readable enroll progress, e.g. "Step 3/5: face left", "Done: name (ID 5)".
+            cv.Optional(CONF_ENROLL_STATUS): text_sensor.text_sensor_schema(
+                icon="mdi:account-clock"
+            ),
+            # Number of captured directions during an interactive enroll (0-5).
+            cv.Optional(CONF_ENROLL_PROGRESS): sensor.sensor_schema(
+                icon="mdi:progress-check",
+                accuracy_decimals=0,
+            ),
+            # Last thing that happened: recognized / rejected / enrolled / deleted ...
+            cv.Optional(CONF_LAST_EVENT): text_sensor.text_sensor_schema(
+                icon="mdi:history"
             ),
             cv.Optional(CONF_ON_READY): automation.validate_automation(
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(Fp002ReadyTrigger)}
@@ -140,6 +167,22 @@ async def to_code(config):
     if CONF_REGISTERED_USER_COUNT in config:
         sens = await sensor.new_sensor(config[CONF_REGISTERED_USER_COUNT])
         cg.add(var.set_registered_user_count_sensor(sens))
+
+    if CONF_MODULE_READY in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_MODULE_READY])
+        cg.add(var.set_module_ready_binary_sensor(sens))
+
+    if CONF_ENROLL_STATUS in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_ENROLL_STATUS])
+        cg.add(var.set_enroll_status_text_sensor(sens))
+
+    if CONF_ENROLL_PROGRESS in config:
+        sens = await sensor.new_sensor(config[CONF_ENROLL_PROGRESS])
+        cg.add(var.set_enroll_progress_sensor(sens))
+
+    if CONF_LAST_EVENT in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_LAST_EVENT])
+        cg.add(var.set_last_event_text_sensor(sens))
 
     for conf in config.get(CONF_ON_READY, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
