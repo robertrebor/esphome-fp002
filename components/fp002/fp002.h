@@ -55,6 +55,7 @@ static const uint8_t MR_SUCCESS = 0x00;
 static const uint8_t MR_FAILED4_TIMEOUT = 0x0D;  // used as our own host-side watchdog result too
 static const uint8_t MR_FAILED4_LIVENESSCHECK = 0x0C;
 static const uint8_t MR_FAILED4_UNKNOWN_HANDUSER = 0xEF;  // palm vein verification failed
+static const uint8_t MR_HOST_NOT_READY = 0xFE;  // host-side only: enroll refused, module not ready yet
 
 // NID_FACE_STATE state value meaning "nothing in front of the camera"
 static const int16_t FACE_STATE_NOFACE = 1;
@@ -87,6 +88,7 @@ enum class Fp002PendingCmd {
   DELETE_USER,
   DELETE_ALL,
   REFRESH_LIST,
+  REFRESH_PALM_LIST,
   RESET,
   GET_STATUS,
 };
@@ -119,12 +121,16 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void set_registered_user_ids_text_sensor(text_sensor::TextSensor *ts) {
     this->registered_user_ids_text_sensor_ = ts;
   }
+  void set_registered_palm_user_ids_text_sensor(text_sensor::TextSensor *ts) {
+    this->registered_palm_user_ids_text_sensor_ = ts;
+  }
   void set_enroll_status_text_sensor(text_sensor::TextSensor *ts) { this->enroll_status_text_sensor_ = ts; }
   void set_last_event_text_sensor(text_sensor::TextSensor *ts) { this->last_event_text_sensor_ = ts; }
 #endif
 #ifdef USE_SENSOR
   void set_recognized_user_id_sensor(sensor::Sensor *s) { this->recognized_user_id_sensor_ = s; }
   void set_registered_user_count_sensor(sensor::Sensor *s) { this->registered_user_count_sensor_ = s; }
+  void set_registered_palm_user_count_sensor(sensor::Sensor *s) { this->registered_palm_user_count_sensor_ = s; }
   void set_enroll_progress_sensor(sensor::Sensor *s) { this->enroll_progress_sensor_ = s; }
 #endif
 
@@ -181,9 +187,16 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void delete_all_users(uint8_t type = 0);
   void delete_user_range(uint16_t begin_id, uint16_t end_id);
 
+  /// Two-step bulk delete for buttons/UI: the first call only arms the delete
+  /// (reported through last_event), a second call with the same type within
+  /// DELETE_ALL_ARM_MS actually deletes. Unconfirmed requests expire on their own.
+  /// delete_all_users() itself stays immediate, for automations that mean it.
+  void request_delete_all_users(uint8_t type = 0);
+
   /// Ask the module for the list of currently registered user ids and refresh the
   /// registered_user_ids / registered_user_count entities. Called automatically
-  /// after boot and after every successful enroll/delete.
+  /// after boot and after every successful enroll/delete. A face-list refresh is
+  /// followed by a palm-vein one when the palm entities are configured.
   void refresh_user_list(bool palm_vein = false);
 
   /// Send MID_RESET - aborts whatever the module is currently doing.
@@ -239,6 +252,11 @@ class Fp002Component : public Component, public uart::UARTDevice {
   bool last_verify_matched_{false};
   uint16_t last_recognized_id_{0};
   uint8_t pending_delete_all_type_{0};
+
+  // Two-step "delete all" (request_delete_all_users): 0 = not armed.
+  uint32_t delete_all_armed_ms_{0};
+  uint8_t delete_all_armed_type_{0};
+  static const uint32_t DELETE_ALL_ARM_MS = 15000;
   static const uint32_t READY_PROBE_INTERVAL_MS = 3000;
 
   // Context carried from the request to when its REPLY arrives.
@@ -288,6 +306,9 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void publish_enroll_status_(const std::string &status, int progress = -1);
   /// Short English name for a module result code (MR_... table, manual 3.2.1).
   static const char *result_name_(uint8_t result);
+  /// Human-readable target of a bulk delete type (0-4).
+  static const char *delete_type_name_(uint8_t type);
+  bool palm_list_wanted_() const;
 
   /// Low-level frame writer (sync word, mid, size, data, checksum) - shared by
   /// send_command_() and send_led_(). Does not touch pending_cmd_ tracking.
@@ -318,12 +339,14 @@ class Fp002Component : public Component, public uart::UARTDevice {
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *recognized_user_name_text_sensor_{nullptr};
   text_sensor::TextSensor *registered_user_ids_text_sensor_{nullptr};
+  text_sensor::TextSensor *registered_palm_user_ids_text_sensor_{nullptr};
   text_sensor::TextSensor *enroll_status_text_sensor_{nullptr};
   text_sensor::TextSensor *last_event_text_sensor_{nullptr};
 #endif
 #ifdef USE_SENSOR
   sensor::Sensor *recognized_user_id_sensor_{nullptr};
   sensor::Sensor *registered_user_count_sensor_{nullptr};
+  sensor::Sensor *registered_palm_user_count_sensor_{nullptr};
   sensor::Sensor *enroll_progress_sensor_{nullptr};
 #endif
 

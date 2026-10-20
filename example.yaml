@@ -113,6 +113,10 @@ fp002:
     name: "Registered User Ids"      # comma-separated list, e.g. "1,4,9,10"
   registered_user_count:
     name: "Registered User Count"
+  registered_palm_user_ids:
+    name: "Registered Palm User Ids"   # palm-vein users, ids 501-800
+  registered_palm_user_count:
+    name: "Registered Palm User Count"
   module_ready:
     name: "Module Ready"               # true once the module answers over UART
   enroll_status:
@@ -252,14 +256,14 @@ button:
   - platform: template
     name: "Delete ALL Users"
     icon: "mdi:account-multiple-remove"
-    # Careful - wipes every enrolled user matching the selected type, no
-    # confirmation dialog on the ESP32 side. (A future version of this
-    # component could gate this behind a second "arm" switch if that's
-    # something you'd want - easy to add.)
+    # Careful - wipes every enrolled user matching the selected type.
+    # Confirmed on the ESP32 itself: the first press only arms the delete
+    # (see Last Event), a second press within 15 s actually deletes;
+    # otherwise it's cancelled automatically.
     on_press:
       - lambda: |-
           // Option index == module type: 0=all, 1=face, 2=palm, 3=general.
           // (select .state was removed in ESPHome 2026.x - use active_index().)
           auto idx = id(delete_all_type).active_index();
           uint8_t type = idx.has_value() ? (uint8_t) idx.value() : 0;
-          id(fp002_module).delete_all_users(type);
+          id(fp002_module).request_delete_all_users(type);

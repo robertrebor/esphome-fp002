@@ -50,6 +50,8 @@ CONF_RECOGNIZED_USER_ID = "recognized_user_id"
 CONF_REGISTERED_USER_IDS = "registered_user_ids"
 CONF_REGISTERED_USER_COUNT = "registered_user_count"
 CONF_MODULE_READY = "module_ready"
+CONF_REGISTERED_PALM_USER_IDS = "registered_palm_user_ids"
+CONF_REGISTERED_PALM_USER_COUNT = "registered_palm_user_count"
 CONF_RECOGNIZED_USER_ADMIN = "recognized_user_admin"
 CONF_ENROLL_STATUS = "enroll_status"
 CONF_ENROLL_PROGRESS = "enroll_progress"
@@ -62,6 +64,12 @@ CONF_ON_ENROLL_FAILED = "on_enroll_failed"
 CONF_ON_DELETE_SUCCESS = "on_delete_success"
 CONF_ON_DELETE_FAILED = "on_delete_failed"
 CONF_ON_DELETE_ALL_SUCCESS = "on_delete_all_success"
+
+# UART settings are checked at config validation time (replaces the C++
+# check_uart_settings(), removed in ESPHome 2027.3).
+FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
+    "fp002", baud_rate=115200, require_tx=True, require_rx=True
+)
 
 CONFIG_SCHEMA = (
     cv.Schema(
@@ -88,6 +96,14 @@ CONFIG_SCHEMA = (
             ),
             cv.Optional(CONF_REGISTERED_USER_COUNT): sensor.sensor_schema(
                 icon="mdi:account-multiple",
+                accuracy_decimals=0,
+            ),
+            # Palm-vein users (ids 501-800), refreshed right after the face list.
+            cv.Optional(CONF_REGISTERED_PALM_USER_IDS): text_sensor.text_sensor_schema(
+                icon="mdi:hand-back-right"
+            ),
+            cv.Optional(CONF_REGISTERED_PALM_USER_COUNT): sensor.sensor_schema(
+                icon="mdi:hand-back-right",
                 accuracy_decimals=0,
             ),
             # Admin flag of the last recognized user (set at enroll time).
@@ -172,6 +188,14 @@ async def to_code(config):
     if CONF_REGISTERED_USER_COUNT in config:
         sens = await sensor.new_sensor(config[CONF_REGISTERED_USER_COUNT])
         cg.add(var.set_registered_user_count_sensor(sens))
+
+    if CONF_REGISTERED_PALM_USER_IDS in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_REGISTERED_PALM_USER_IDS])
+        cg.add(var.set_registered_palm_user_ids_text_sensor(sens))
+
+    if CONF_REGISTERED_PALM_USER_COUNT in config:
+        sens = await sensor.new_sensor(config[CONF_REGISTERED_PALM_USER_COUNT])
+        cg.add(var.set_registered_palm_user_count_sensor(sens))
 
     if CONF_RECOGNIZED_USER_ADMIN in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_RECOGNIZED_USER_ADMIN])

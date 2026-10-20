@@ -74,6 +74,8 @@ cards:
     entities:
       - entity: sensor.fp002_face_recognition_registered_user_ids
         name: Face user ids
+      - entity: sensor.fp002_face_recognition_registered_palm_user_ids
+        name: Palm-vein user ids
       - type: divider
       - entity: number.fp002_face_recognition_delete_user_id
         name: User id to delete
@@ -94,7 +96,7 @@ cards:
       - entity: select.fp002_face_recognition_delete_all_users_which
         name: Delete all
       - type: button
-        name: Delete all users
+        name: Delete all users (press twice within 15 s)
         icon: mdi:account-multiple-remove
         action_name: Delete all
         tap_action:
@@ -103,7 +105,7 @@ cards:
           target:
             entity_id: button.fp002_face_recognition_delete_all_users
           confirmation:
-            text: Delete ALL users of the selected type? This cannot be undone.
+            text: Delete ALL users of the selected type? The device arms on the first press and deletes on a second press within 15 s.
 
   # --- Event log ------------------------------------------------------------------
   - type: logbook

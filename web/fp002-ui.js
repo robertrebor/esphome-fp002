@@ -37,6 +37,8 @@
     userAdmin: "binary_sensor/Recognized User Is Admin",
     userIds: "text_sensor/Registered User Ids",
     userCount: "sensor/Registered User Count",
+    palmIds: "text_sensor/Registered Palm User Ids",
+    palmCount: "sensor/Registered Palm User Count",
     enrollStatus: "text_sensor/Enroll Status",
     enrollProgress: "sensor/Enroll Progress",
     lastEvent: "text_sensor/Last Event",
@@ -63,6 +65,7 @@
       enrollTitle: "Enroll new user", name: "Name", namePh: "name", admin: "Admin", palm: "Palm vein",
       quick: "Quick (single photo)", startEnroll: "Start enroll",
       usersTitle: "Registered users", usersSub: "face users, click an id to select it",
+      palmSub: "palm-vein users", deleteAllHint: "Two steps on the device: armed first, then confirmed.",
       deleteById: "Delete user by id", del: "Delete", deleteAllLabel: "Delete all users", deleteAll: "Delete all",
       logTitle: "Event log", logSub: "(since this page was opened)", beforeLoad: "(before page load)",
       selectForDelete: "Select for delete",
@@ -85,6 +88,7 @@
       enrollTitle: "Registrácia nového používateľa", name: "Meno", namePh: "meno", admin: "Administrátor",
       palm: "Žily dlane", quick: "Rýchla (jedna fotka)", startEnroll: "Spustiť registráciu",
       usersTitle: "Registrovaní používatelia", usersSub: "používatelia tváre, kliknutím na ID ho vyberieš",
+      palmSub: "používatelia dlane", deleteAllHint: "Na zariadení v dvoch krokoch: najprv pripraví, potom potvrdí.",
       deleteById: "Zmazať používateľa podľa ID", del: "Zmazať", deleteAllLabel: "Zmazať všetkých používateľov",
       deleteAll: "Zmazať všetkých",
       logTitle: "Log udalostí", logSub: "(od otvorenia stránky)", beforeLoad: "(pred otvorením stránky)",
@@ -113,6 +117,7 @@
     "face already enrolled": "tvár je už registrovaná", "liveness check failed": "kontrola živosti zlyhala",
     timeout: "časový limit", "palm not recognized": "dlaň nerozpoznaná", "palm already enrolled": "dlaň je už registrovaná",
     "no reply from module": "modul neodpovedá", "enroll did not finish": "registrácia sa nedokončila", error: "chyba",
+    "module not ready": "modul nie je pripravený",
   };
   const DELETED_SK = {
     "all users": "všetci používatelia", "all face users": "všetci používatelia tváre",
@@ -149,6 +154,11 @@
     if ((m = text.match(/^Rejected: not recognized \((.*)\)$/))) return `Zamietnuté: nerozpoznaný (${reason(m[1])})`;
     if ((m = text.match(/^Enrolled: (.*) \(ID (\d+)\)$/))) return `Zaregistrovaný: ${m[1]} (ID ${m[2]})`;
     if ((m = text.match(/^Enroll of '(.*)' failed: (.*)$/))) return `Registrácia „${m[1]}“ zlyhala: ${reason(m[2])}`;
+    if ((m = text.match(/^Enroll of '(.*)' ignored: another enroll is in progress$/)))
+      return `Registrácia „${m[1]}“ ignorovaná: prebieha iná registrácia`;
+    if ((m = text.match(/^Delete all armed \((.*)\): press again within (\d+) s to confirm$/)))
+      return `Mazanie pripravené (${DELETED_SK[m[1]] || m[1]}): potvrď opätovným stlačením do ${m[2]} s`;
+    if (text === "Delete all cancelled: not confirmed in time") return "Mazanie zrušené: nepotvrdené včas";
     if ((m = text.match(/^Deleted user ID (\d+)$/))) return `Zmazaný používateľ ID ${m[1]}`;
     if ((m = text.match(/^Delete of user ID (\d+) failed: (.*)$/))) return `Zmazanie používateľa ID ${m[1]} zlyhalo: ${reason(m[2])}`;
     if ((m = text.match(/^Deleted (.*)$/))) return `Zmazaní: ${DELETED_SK[m[1]] || m[1]}`;
@@ -249,6 +259,8 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
       <h2 data-i18n="usersTitle"></h2>
       <div class="big" id="fp-count">-</div><div class="muted" data-i18n="usersSub"></div>
       <div class="chips" id="fp-chips"></div>
+      <div data-need="palmIds"><div class="muted" style="margin-top:6px"><span data-i18n="palmSub"></span>: <b id="fp-palm-count">-</b></div>
+        <div class="chips" id="fp-palm-chips"></div></div>
       <hr>
       <div data-need="deleteButton">
         <label class="field" for="fp-del-id" data-i18n="deleteById"></label>
@@ -260,6 +272,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
         <label class="field" for="fp-delall-type" data-i18n="deleteAllLabel"></label>
         <div class="row"><select id="fp-delall-type" style="max-width:220px"></select>
           <button class="danger" id="fp-delall" data-i18n="deleteAll"></button></div>
+        <div class="muted" style="margin-top:6px" data-i18n="deleteAllHint"></div>
       </div>
     </section>
 
@@ -325,6 +338,25 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     while (log.children.length > MAX_LOG) log.lastChild.remove();
   }
 
+  function renderChips(elId, csv) {
+    const chips = $(elId);
+    chips.innerHTML = "";
+    String(csv || "")
+      .split(",")
+      .filter(Boolean)
+      .forEach((id) => {
+        const c = document.createElement("button");
+        c.className = "chip";
+        c.textContent = id;
+        c.title = t("selectForDelete");
+        c.onclick = () => {
+          $("fp-del-id").value = id;
+          $("fp-del-palm").checked = Number(id) > 500;
+        };
+        chips.append(c);
+      });
+  }
+
   function renderVisibility() {
     document.querySelectorAll("[data-need]").forEach((el) => {
       const ok = el.dataset.need.split(" ").every((k) => present.has(ENTITIES[k]));
@@ -379,6 +411,10 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
 
     const count = num(value("userCount"));
     $("fp-count").textContent = count !== undefined ? count : "-";
+    const palmCount = num(value("palmCount"));
+    $("fp-palm-count").textContent = palmCount !== undefined ? palmCount : "-";
+    if (changedId === ENTITIES.palmIds || changedId === ENTITIES.userIds || changedId === undefined)
+      renderChips("fp-palm-chips", value("palmIds"));
     if (changedId === ENTITIES.userIds || changedId === undefined) {
       const chips = $("fp-chips");
       chips.innerHTML = "";
@@ -510,6 +546,10 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     if (!confirm(t("confirmDeleteAll", t("options")[which] || which))) return;
     try {
       await post(ENTITIES.deleteAllType, "set", { option: which });
+      // The device confirms bulk deletes in two steps (arm, then confirm within
+      // 15 s); the dialog above was the user's confirmation, so press twice.
+      await post(ENTITIES.deleteAllButton, "press");
+      await new Promise((r) => setTimeout(r, 400));
       await post(ENTITIES.deleteAllButton, "press");
       toast(t("deletingUsers"));
     } catch (err) {

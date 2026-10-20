@@ -140,6 +140,10 @@ own too:
 ```yaml
 fp002:
   # ...
+  registered_palm_user_ids:
+    name: "Registered Palm User Ids"  # text, palm-vein user ids (501-800), e.g. "501,503"
+  registered_palm_user_count:
+    name: "Registered Palm User Count"
   recognized_user_admin:
     name: "Recognized User Is Admin"  # binary_sensor, admin flag of the last recognized user
   module_ready:
@@ -236,8 +240,13 @@ ESPHome -> your device** (and on its device page), right next to
 - **Delete User Id** (number) + **Delete User Is Palm Vein** (switch) +
   **Delete User By Id** (button) - delete one user.
 - **Delete All Users - Which** (dropdown: all/face only/palm only/general
-  only) + **Delete ALL Users** (button) - bulk delete. **Destructive, no
-  confirmation dialog** - double-check the dropdown before pressing it.
+  only) + **Delete ALL Users** (button) - bulk delete. **Destructive**, so
+  it's confirmed on the ESP32 itself: the first press only arms it (shown in
+  **Last Event**), a second press within 15 s deletes, otherwise it's
+  cancelled automatically. (The `delete_all_users` API action stays a single
+  call - an automation calling it means it.)
+- **Enroll New User** is ignored while another enroll is still running, and
+  fails right away with "module not ready" if the module isn't answering.
 
 ## Calling it from an automation or script (optional)
 
@@ -332,9 +341,10 @@ Recognition needs no extra setup: the same background verify that matches
 faces also matches palms, and the result shows up in the same **Recognized
 User Name** / **Recognized User Id** entities.
 
-**Limitation:** **Registered User Ids** / **Registered User Count** currently
-list face users only - palm users are stored in the module and recognized
-normally, they just don't appear in those two entities.
+Palm users are listed separately, in the optional **Registered Palm User
+Ids** / **Registered Palm User Count** entities (refreshed together with the
+face list after boot, enroll and delete); **Registered User Ids** / **Count**
+stay face-only.
 
 ## Design notes / known unknowns
 

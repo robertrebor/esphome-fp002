@@ -117,6 +117,13 @@ void Fp002Component::loop() {
     this->send_command_(q.mid, q.data, q.kind, q.timeout_ms);
   }
 
+  // Unconfirmed two-step "delete all" expires on its own.
+  if (this->delete_all_armed_ms_ != 0 && millis() - this->delete_all_armed_ms_ >= DELETE_ALL_ARM_MS) {
+    this->delete_all_armed_ms_ = 0;
+    ESP_LOGI(TAG, "Delete all not confirmed in time, cancelled");
+    this->publish_event_("Delete all cancelled: not confirmed in time");
+  }
+
   this->update_led_blinks_();
 
   // Interactive enroll step sequencer: once any LED feedback for the previous
@@ -141,7 +148,6 @@ void Fp002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Verify timeout: %us", this->verify_timeout_);
   ESP_LOGCONFIG(TAG, "  Enroll timeout: %us", this->enroll_timeout_);
   ESP_LOGCONFIG(TAG, "  Cooldown between attempts: %" PRIu32 "ms", this->cooldown_ms_);
-  this->check_uart_settings(115200);
 #ifdef USE_BINARY_SENSOR
   LOG_BINARY_SENSOR("  ", "Face Recognized", this->face_recognized_binary_sensor_);
   LOG_BINARY_SENSOR("  ", "Module Ready", this->module_ready_binary_sensor_);
@@ -150,12 +156,14 @@ void Fp002Component::dump_config() {
 #ifdef USE_TEXT_SENSOR
   LOG_TEXT_SENSOR("  ", "Recognized User Name", this->recognized_user_name_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Registered User Ids", this->registered_user_ids_text_sensor_);
+  LOG_TEXT_SENSOR("  ", "Registered Palm User Ids", this->registered_palm_user_ids_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Enroll Status", this->enroll_status_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Last Event", this->last_event_text_sensor_);
 #endif
 #ifdef USE_SENSOR
   LOG_SENSOR("  ", "Recognized User Id", this->recognized_user_id_sensor_);
   LOG_SENSOR("  ", "Registered User Count", this->registered_user_count_sensor_);
+  LOG_SENSOR("  ", "Registered Palm User Count", this->registered_palm_user_count_sensor_);
   LOG_SENSOR("  ", "Enroll Progress", this->enroll_progress_sensor_);
 #endif
 }
@@ -285,6 +293,23 @@ void Fp002Component::start_verify() {
 
 void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool palm_vein, bool quick,
                                   uint8_t timeout) {
+  // Guard: the module has to be up, otherwise an interactive enroll would sit
+  // retrying its first step forever (and a single-frame one would just be dropped).
+  if (!this->ready_) {
+    ESP_LOGW(TAG, "Module is not ready, cannot enroll '%s'", user_name.c_str());
+    this->publish_enroll_status_(std::string("Failed: ") + result_name_(MR_HOST_NOT_READY), 0);
+    this->publish_event_("Enroll of '" + user_name + "' failed: " + result_name_(MR_HOST_NOT_READY));
+    this->enroll_failed_callback_.call(MR_HOST_NOT_READY);
+    return;
+  }
+  // Guard: one enroll at a time - a second press while one is running would
+  // otherwise restart the direction sequence / overwrite the pending name.
+  if (this->interactive_enroll_active_ || this->pending_cmd_ == Fp002PendingCmd::ENROLL ||
+      (this->queued_.active && this->queued_.kind == Fp002PendingCmd::ENROLL)) {
+    ESP_LOGW(TAG, "An enroll is already in progress, ignoring enroll of '%s'", user_name.c_str());
+    this->publish_event_("Enroll of '" + user_name + "' ignored: another enroll is in progress");
+    return;
+  }
   uint8_t use_timeout = timeout > 0 ? timeout : this->enroll_timeout_;
   this->pending_enroll_name_ = user_name;
   this->pending_enroll_admin_ = admin;
@@ -370,6 +395,31 @@ void Fp002Component::delete_all_users(uint8_t type) {
   this->send_command_(MID_DELALL, data, Fp002PendingCmd::DELETE_ALL, 3000);
 }
 
+void Fp002Component::request_delete_all_users(uint8_t type) {
+  if (type > 3)
+    type = 0;
+  uint32_t now = millis();
+  if (this->delete_all_armed_ms_ != 0 && now - this->delete_all_armed_ms_ < DELETE_ALL_ARM_MS &&
+      this->delete_all_armed_type_ == type) {
+    this->delete_all_armed_ms_ = 0;
+    ESP_LOGI(TAG, "Delete all confirmed");
+    this->delete_all_users(type);
+    return;
+  }
+  this->delete_all_armed_ms_ = now != 0 ? now : 1;
+  this->delete_all_armed_type_ = type;
+  ESP_LOGW(TAG, "Delete of %s armed - request again within %" PRIu32 " s to confirm", delete_type_name_(type),
+           DELETE_ALL_ARM_MS / 1000);
+  this->publish_event_(std::string("Delete all armed (") + delete_type_name_(type) + "): press again within " +
+                       std::to_string(DELETE_ALL_ARM_MS / 1000) + " s to confirm");
+}
+
+const char *Fp002Component::delete_type_name_(uint8_t type) {
+  static const char *const NAMES[] = {"all users", "all face users", "all palm-vein users", "all general users",
+                                      "a range of users"};
+  return NAMES[type <= 4 ? type : 0];
+}
+
 void Fp002Component::delete_user_range(uint16_t begin_id, uint16_t end_id) {
   ESP_LOGI(TAG, "Deleting users in range [%u, %u]", begin_id, end_id);
   this->pending_delete_all_type_ = 4;
@@ -386,7 +436,20 @@ void Fp002Component::delete_user_range(uint16_t begin_id, uint16_t end_id) {
 void Fp002Component::refresh_user_list(bool palm_vein) {
   std::vector<uint8_t> data = {static_cast<uint8_t>(palm_vein ? 2 : 1)};  // short bitmap format
   ESP_LOGD(TAG, "Requesting registered %s user list", palm_vein ? "palm-vein" : "face");
-  this->send_command_(MID_GET_ALL_USERID, data, Fp002PendingCmd::REFRESH_LIST, 3000);
+  // The reply doesn't say which list it is, so the kind of the in-flight command does.
+  this->send_command_(MID_GET_ALL_USERID, data,
+                      palm_vein ? Fp002PendingCmd::REFRESH_PALM_LIST : Fp002PendingCmd::REFRESH_LIST, 3000);
+}
+
+bool Fp002Component::palm_list_wanted_() const {
+  bool wanted = false;
+#ifdef USE_TEXT_SENSOR
+  wanted |= this->registered_palm_user_ids_text_sensor_ != nullptr;
+#endif
+#ifdef USE_SENSOR
+  wanted |= this->registered_palm_user_count_sensor_ != nullptr;
+#endif
+  return wanted;
 }
 
 void Fp002Component::reset_module() {
@@ -445,6 +508,8 @@ const char *Fp002Component::result_name_(uint8_t result) {
       return "palm not recognized";
     case 0xF1:
       return "palm already enrolled";
+    case 0xFE:
+      return "module not ready";
     default:
       return "error";
   }
@@ -696,10 +761,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
     if (result == MR_SUCCESS) {
       ESP_LOGI(TAG, "Bulk delete completed");
-      static const char *const TYPE_NAMES[] = {"all users", "all face users", "all palm-vein users",
-                                               "all general users", "a range of users"};
-      this->publish_event_(std::string("Deleted ") +
-                           TYPE_NAMES[this->pending_delete_all_type_ <= 4 ? this->pending_delete_all_type_ : 0]);
+      this->publish_event_(std::string("Deleted ") + delete_type_name_(this->pending_delete_all_type_));
       this->delete_all_success_callback_.call();
       this->refresh_user_list(false);
     } else {
@@ -712,8 +774,12 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
   // MID_GET_ALL_USERID ---------------------------------------------------------
   if (mid == MID_GET_ALL_USERID) {
+    const bool palm = this->pending_cmd_ == Fp002PendingCmd::REFRESH_PALM_LIST;
     this->pending_cmd_ = Fp002PendingCmd::NONE;
     this->last_command_done_ms_ = millis();
+    // Palm-vein ids are 501-800; the palm bitmap (fmt=2) is sized for 300 users,
+    // so bit n is taken as id 501 + n (the face bitmap's bit n is id 1 + n).
+    const uint32_t first_id = palm ? 501 : 1;
 
     if (result == MR_SUCCESS && len >= 2) {
       uint16_t reported_count = (static_cast<uint16_t>(data[0]) << 8) | data[1];
@@ -723,7 +789,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
         uint8_t b = data[byte_idx];
         for (uint8_t bit = 0; bit < 8; bit++) {
           if (b & (1 << bit)) {
-            uint32_t user_id = (byte_idx - 2) * 8 + bit + 1;
+            uint32_t user_id = (byte_idx - 2) * 8 + bit + first_id;
             if (!ids_csv.empty())
               ids_csv += ",";
             ids_csv += std::to_string(user_id);
@@ -731,20 +797,26 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
           }
         }
       }
-      ESP_LOGI(TAG, "Registered users: %" PRIu32 " (module reported %u): %s", found, reported_count,
-                ids_csv.empty() ? "(none)" : ids_csv.c_str());
+      ESP_LOGI(TAG, "Registered %s users: %" PRIu32 " (module reported %u): %s", palm ? "palm-vein" : "face", found,
+                reported_count, ids_csv.empty() ? "(none)" : ids_csv.c_str());
 #ifdef USE_TEXT_SENSOR
-      if (this->registered_user_ids_text_sensor_ != nullptr)
-        this->registered_user_ids_text_sensor_->publish_state(ids_csv);
+      text_sensor::TextSensor *ids_ts =
+          palm ? this->registered_palm_user_ids_text_sensor_ : this->registered_user_ids_text_sensor_;
+      if (ids_ts != nullptr)
+        ids_ts->publish_state(ids_csv);
 #endif
 #ifdef USE_SENSOR
-      if (this->registered_user_count_sensor_ != nullptr)
-        this->registered_user_count_sensor_->publish_state(found);
+      sensor::Sensor *count_s = palm ? this->registered_palm_user_count_sensor_ : this->registered_user_count_sensor_;
+      if (count_s != nullptr)
+        count_s->publish_state(found);
 #endif
       this->user_list_updated_callback_.call();
     } else {
-      ESP_LOGW(TAG, "Failed to get registered user list (result=0x%02X)", result);
+      ESP_LOGW(TAG, "Failed to get registered %s user list (result=0x%02X)", palm ? "palm-vein" : "face", result);
     }
+    // Every face-list refresh (boot, enroll, delete) is followed by the palm list.
+    if (!palm && this->palm_list_wanted_())
+      this->refresh_user_list(true);
     return;
   }
 
