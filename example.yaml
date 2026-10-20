@@ -239,9 +239,8 @@ button:
     # something you'd want - easy to add.)
     on_press:
       - lambda: |-
-          uint8_t type = 0;
-          std::string which = id(delete_all_type).state;
-          if (which == "Face users only") type = 1;
-          else if (which == "Palm-vein users only") type = 2;
-          else if (which == "General users only") type = 3;
+          // Option index == module type: 0=all, 1=face, 2=palm, 3=general.
+          // (select .state was removed in ESPHome 2026.x - use active_index().)
+          auto idx = id(delete_all_type).active_index();
+          uint8_t type = idx.has_value() ? (uint8_t) idx.value() : 0;
           id(fp002_module).delete_all_users(type);

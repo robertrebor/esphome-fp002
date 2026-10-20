@@ -54,6 +54,9 @@ static const uint8_t NID_EYE_STATE = 0x04;
 static const uint8_t MR_SUCCESS = 0x00;
 static const uint8_t MR_FAILED4_TIMEOUT = 0x0D;  // used as our own host-side watchdog result too
 
+// MID_GETSTATUS status byte
+static const uint8_t MS_STANDBY = 0x00;
+
 // face_direction codes for MID_ENROLL (section 4.2 of the manual). Sent one at a
 // time, host -> module; the module's REPLY echoes back a cumulative bitmask of
 // which directions have been captured so far (Figure 10).
@@ -80,6 +83,7 @@ enum class Fp002PendingCmd {
   DELETE_ALL,
   REFRESH_LIST,
   RESET,
+  GET_STATUS,
 };
 
 class Fp002Component : public Component, public uart::UARTDevice {
@@ -196,6 +200,24 @@ class Fp002Component : public Component, public uart::UARTDevice {
   uint32_t command_timeout_ms_{5000};
   uint32_t last_command_done_ms_{0};
 
+  // One command that arrived while another was still in flight (typically the
+  // background auto-verify). It's sent from loop() as soon as the module is idle;
+  // if the command in flight is a verify, that verify is aborted with MID_RESET
+  // first so HA-triggered enroll/delete requests aren't silently dropped.
+  struct QueuedCommand {
+    bool active{false};
+    uint8_t mid{0};
+    std::vector<uint8_t> data;
+    Fp002PendingCmd kind{Fp002PendingCmd::NONE};
+    uint32_t timeout_ms{0};
+  } queued_;
+
+  // NID_READY is only sent when the module itself powers up. If only the ESP32
+  // restarts (OTA, reset button) while the module stays powered, it never comes,
+  // so we probe with MID_GETSTATUS until the module answers.
+  uint32_t last_ready_probe_ms_{0};
+  static const uint32_t READY_PROBE_INTERVAL_MS = 3000;
+
   // Context carried from the request to when its REPLY arrives.
   uint16_t pending_delete_user_id_{0};
   bool pending_delete_is_palm_{false};
@@ -231,6 +253,11 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void handle_frame_();
   void handle_reply_(uint8_t mid, uint8_t result, const uint8_t *data, size_t len);
   void handle_note_(uint8_t nid, const uint8_t *data, size_t len);
+
+  /// Common "module is ready" handling for NID_READY and a successful status probe.
+  void mark_ready_();
+  /// Abort a background MID_VERIFY with MID_RESET (used when a queued command is waiting).
+  void abort_verify_();
 
   /// Low-level frame writer (sync word, mid, size, data, checksum) - shared by
   /// send_command_() and send_led_(). Does not touch pending_cmd_ tracking.

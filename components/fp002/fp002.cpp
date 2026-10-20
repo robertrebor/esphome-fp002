@@ -92,20 +92,37 @@ void Fp002Component::loop() {
     }
   }
 
+  // Ready probe: covers an ESP32-only restart (OTA etc.) where the still powered
+  // module never sends NID_READY again.
+  if (!this->ready_ && this->pending_cmd_ == Fp002PendingCmd::NONE &&
+      millis() - this->last_ready_probe_ms_ > READY_PROBE_INTERVAL_MS) {
+    this->last_ready_probe_ms_ = millis();
+    ESP_LOGD(TAG, "No NID_READY seen yet, probing module with MID_GETSTATUS");
+    this->send_command_(MID_GETSTATUS, {}, Fp002PendingCmd::GET_STATUS, 1000);
+  }
+
+  // Send a command that was queued while another one was in flight.
+  if (this->queued_.active && this->pending_cmd_ == Fp002PendingCmd::NONE) {
+    QueuedCommand q = std::move(this->queued_);
+    this->queued_ = QueuedCommand{};
+    ESP_LOGD(TAG, "Sending queued command 0x%02X", q.mid);
+    this->send_command_(q.mid, q.data, q.kind, q.timeout_ms);
+  }
+
   this->update_led_blinks_();
 
   // Interactive enroll step sequencer: once any LED feedback for the previous
   // direction has finished playing and nothing else is in flight, send the next
   // direction. (The first direction is sent directly from enroll_user().)
   if (this->interactive_enroll_active_ && !this->led_blink_active_ &&
-      this->pending_cmd_ == Fp002PendingCmd::NONE) {
+      this->pending_cmd_ == Fp002PendingCmd::NONE && !this->queued_.active) {
     this->send_enroll_step_();
   }
 
   // Auto-verify loop: as soon as the module is ready and idle (no enroll/delete/list
   // request in flight), (re)start listening for a face/palm.
   if (this->auto_verify_ && this->ready_ && this->pending_cmd_ == Fp002PendingCmd::NONE &&
-      !this->interactive_enroll_active_ && millis() - this->last_command_done_ms_ > this->cooldown_ms_) {
+      !this->interactive_enroll_active_ && !this->queued_.active && millis() - this->last_command_done_ms_ > this->cooldown_ms_) {
     this->start_verify();
   }
 }
@@ -158,11 +175,30 @@ void Fp002Component::write_frame_(uint8_t mid, const std::vector<uint8_t> &data)
 bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data, Fp002PendingCmd kind,
                                     uint32_t timeout_ms) {
   if (this->pending_cmd_ != Fp002PendingCmd::NONE) {
-    ESP_LOGW(TAG, "Module is busy (command 0x%02X in flight), ignoring new command 0x%02X", this->pending_reply_mid_,
-              mid);
-    return false;
+    // The background auto-verify is simply re-armed later - never queue it.
+    if (kind == Fp002PendingCmd::VERIFY) {
+      ESP_LOGV(TAG, "Module is busy (command 0x%02X in flight), skipping verify", this->pending_reply_mid_);
+      return false;
+    }
+    if (this->queued_.active) {
+      ESP_LOGW(TAG, "Module is busy (command 0x%02X in flight, 0x%02X queued), ignoring new command 0x%02X",
+                this->pending_reply_mid_, this->queued_.mid, mid);
+      return false;
+    }
+    this->queued_.active = true;
+    this->queued_.mid = mid;
+    this->queued_.data = data;
+    this->queued_.kind = kind;
+    this->queued_.timeout_ms = timeout_ms;
+    if (this->pending_cmd_ == Fp002PendingCmd::VERIFY) {
+      ESP_LOGD(TAG, "Aborting background verify to run command 0x%02X", mid);
+      this->abort_verify_();
+    } else {
+      ESP_LOGD(TAG, "Command 0x%02X in flight, queued command 0x%02X", this->pending_reply_mid_, mid);
+    }
+    return true;
   }
-  if (!this->ready_ && mid != MID_RESET) {
+  if (!this->ready_ && mid != MID_RESET && mid != MID_GETSTATUS) {
     ESP_LOGW(TAG, "Module is not ready yet, ignoring command 0x%02X", mid);
     return false;
   }
@@ -174,6 +210,16 @@ bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data
   this->command_started_ms_ = millis();
   this->command_timeout_ms_ = timeout_ms;
   return true;
+}
+
+void Fp002Component::abort_verify_() {
+  // MID_RESET cancels the running verify (manual 4.3.1); the queued command is
+  // sent from loop() once the RESET reply (or the watchdog) clears pending_cmd_.
+  this->write_frame_(MID_RESET, {});
+  this->pending_cmd_ = Fp002PendingCmd::RESET;
+  this->pending_reply_mid_ = MID_RESET;
+  this->command_started_ms_ = millis();
+  this->command_timeout_ms_ = 1000;
 }
 
 void Fp002Component::send_led_(uint8_t color, bool on) {
@@ -325,6 +371,7 @@ void Fp002Component::refresh_user_list(bool palm_vein) {
 void Fp002Component::reset_module() {
   ESP_LOGD(TAG, "Sending MID_RESET");
   this->pending_cmd_ = Fp002PendingCmd::NONE;  // abandon whatever we were waiting on
+  this->queued_ = QueuedCommand{};
   this->send_command_(MID_RESET, {}, Fp002PendingCmd::RESET, 2000);
 }
 
@@ -349,14 +396,18 @@ void Fp002Component::handle_frame_() {
   }
 }
 
+void Fp002Component::mark_ready_() {
+  this->ready_ = true;
+  this->last_command_done_ms_ = millis();
+  this->ready_callback_.call();
+  this->refresh_user_list(false);  // populate the registered-user list right away
+}
+
 void Fp002Component::handle_note_(uint8_t nid, const uint8_t *data, size_t len) {
   switch (nid) {
     case NID_READY: {
       ESP_LOGI(TAG, "FP002 module reports ready");
-      this->ready_ = true;
-      this->last_command_done_ms_ = millis();
-      this->ready_callback_.call();
-      this->refresh_user_list(false);  // populate the registered-user list right away
+      this->mark_ready_();
       break;
     }
     case NID_FACE_STATE:
@@ -384,6 +435,11 @@ void Fp002Component::handle_note_(uint8_t nid, const uint8_t *data, size_t len) 
 void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *data, size_t len) {
   // MID_VERIFY -------------------------------------------------------------
   if (mid == MID_VERIFY) {
+    if (this->pending_cmd_ != Fp002PendingCmd::VERIFY) {
+      // Late reply of a verify we already aborted (MID_RESET) - not ours anymore.
+      ESP_LOGV(TAG, "Ignoring stale MID_VERIFY reply (result=0x%02X)", result);
+      return;
+    }
     this->pending_cmd_ = Fp002PendingCmd::NONE;
     this->last_command_done_ms_ = millis();
 
@@ -573,8 +629,18 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
     return;
   }
   if (mid == MID_GETSTATUS) {
-    if (len >= 1)
-      ESP_LOGD(TAG, "Module status: 0x%02X", data[0]);
+    if (this->pending_cmd_ == Fp002PendingCmd::GET_STATUS) {
+      this->pending_cmd_ = Fp002PendingCmd::NONE;
+      this->last_command_done_ms_ = millis();
+    }
+    uint8_t status = len >= 1 ? data[0] : 0xFF;
+    ESP_LOGD(TAG, "Module status: 0x%02X (result=0x%02X)", status, result);
+    if (!this->ready_ && result == MR_SUCCESS) {
+      ESP_LOGI(TAG, "FP002 module answered status probe - treating it as ready");
+      if (status != MS_STANDBY)
+        this->send_command_(MID_RESET, {}, Fp002PendingCmd::RESET, 2000);  // stop leftover work
+      this->mark_ready_();
+    }
     return;
   }
   if (mid == MID_GET_VERSION) {
