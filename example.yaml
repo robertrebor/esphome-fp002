@@ -11,8 +11,9 @@
 #   IR  (pin5)  -> optional, not used by this component yet
 #   VCC (pin6)  -> 3-5V for the IR sensor, if you wire it up
 #
-# Place this repo's `components/fp002` folder next to this file (or point
-# `external_components.source.path` at wherever you keep it) before compiling.
+# The fp002 component is downloaded from GitHub at compile time (see
+# `external_components` below), pinned to a release - change the version
+# there to upgrade.
 
 esphome:
   name: fp002-face-recognition
@@ -72,9 +73,7 @@ ota:
   platform: esphome
 
 external_components:
-  - source:
-      type: local
-      path: components
+  - source: github://robertrebor/esphome-fp002@v1.0.1
     components: [fp002]
 
 uart:
