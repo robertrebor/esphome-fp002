@@ -34,6 +34,7 @@
     faceRecognized: "binary_sensor/Face Recognized",
     userName: "text_sensor/Recognized User Name",
     userId: "sensor/Recognized User Id",
+    userAdmin: "binary_sensor/Recognized User Is Admin",
     userIds: "text_sensor/Registered User Ids",
     userCount: "sensor/Registered User Count",
     enrollStatus: "text_sensor/Enroll Status",
@@ -369,7 +370,8 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     const name = value("userName");
     $("fp-name").textContent = name || "-";
     const uid = num(value("userId"));
-    $("fp-uid").textContent = uid !== undefined ? `ID ${uid}` : "";
+    $("fp-uid").textContent =
+      (uid !== undefined ? `ID ${uid}` : "") + (uid !== undefined && value("userAdmin") === true ? ` · ${t("admin")}` : "");
     const av = $("fp-avatar");
     av.textContent = name ? name.trim().charAt(0).toUpperCase() : "?";
     av.classList.toggle("on", recognized);

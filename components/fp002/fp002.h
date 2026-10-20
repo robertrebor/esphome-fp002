@@ -108,6 +108,9 @@ class Fp002Component : public Component, public uart::UARTDevice {
     this->face_recognized_binary_sensor_ = bs;
   }
   void set_module_ready_binary_sensor(binary_sensor::BinarySensor *bs) { this->module_ready_binary_sensor_ = bs; }
+  void set_recognized_user_admin_binary_sensor(binary_sensor::BinarySensor *bs) {
+    this->recognized_user_admin_binary_sensor_ = bs;
+  }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_recognized_user_name_text_sensor(text_sensor::TextSensor *ts) {
@@ -310,6 +313,7 @@ class Fp002Component : public Component, public uart::UARTDevice {
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *face_recognized_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *module_ready_binary_sensor_{nullptr};
+  binary_sensor::BinarySensor *recognized_user_admin_binary_sensor_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *recognized_user_name_text_sensor_{nullptr};

@@ -140,6 +140,8 @@ own too:
 ```yaml
 fp002:
   # ...
+  recognized_user_admin:
+    name: "Recognized User Is Admin"  # binary_sensor, admin flag of the last recognized user
   module_ready:
     name: "Module Ready"      # binary_sensor, on once the module answers over UART
   enroll_status:
@@ -149,6 +151,12 @@ fp002:
   last_event:
     name: "Last Event"        # text, e.g. "Recognized: name (ID 4)", "Rejected: not recognized (timeout)"
 ```
+
+The admin flag is just a label stored with each user at enroll time - the
+module itself gives admins no extra rights. It's returned on every
+recognition (also as the `admin` argument of `on_face_recognized`, e.g. to let
+only admins open a particular door), and **Delete All Users -> General users
+only** removes every user *without* it.
 
 `last_event` is deliberately quiet: a recognition is reported once when the
 person changes or comes back, not on every verify cycle while they keep

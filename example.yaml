@@ -107,6 +107,8 @@ fp002:
     name: "Recognized User Name"
   recognized_user_id:
     name: "Recognized User Id"
+  recognized_user_admin:
+    name: "Recognized User Is Admin"   # admin flag of the last recognized user
   registered_user_ids:
     name: "Registered User Ids"      # comma-separated list, e.g. "1,4,9,10"
   registered_user_count:

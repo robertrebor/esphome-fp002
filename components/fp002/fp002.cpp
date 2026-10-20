@@ -145,6 +145,7 @@ void Fp002Component::dump_config() {
 #ifdef USE_BINARY_SENSOR
   LOG_BINARY_SENSOR("  ", "Face Recognized", this->face_recognized_binary_sensor_);
   LOG_BINARY_SENSOR("  ", "Module Ready", this->module_ready_binary_sensor_);
+  LOG_BINARY_SENSOR("  ", "Recognized User Is Admin", this->recognized_user_admin_binary_sensor_);
 #endif
 #ifdef USE_TEXT_SENSOR
   LOG_TEXT_SENSOR("  ", "Recognized User Name", this->recognized_user_name_text_sensor_);
@@ -546,6 +547,11 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 #ifdef USE_BINARY_SENSOR
       if (this->face_recognized_binary_sensor_ != nullptr)
         this->face_recognized_binary_sensor_->publish_state(true);
+#endif
+#ifdef USE_BINARY_SENSOR
+      // Like the name/id sensors, this describes the last recognized user.
+      if (this->recognized_user_admin_binary_sensor_ != nullptr)
+        this->recognized_user_admin_binary_sensor_->publish_state(admin);
 #endif
 #ifdef USE_TEXT_SENSOR
       if (this->recognized_user_name_text_sensor_ != nullptr)

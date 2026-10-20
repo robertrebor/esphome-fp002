@@ -50,6 +50,7 @@ CONF_RECOGNIZED_USER_ID = "recognized_user_id"
 CONF_REGISTERED_USER_IDS = "registered_user_ids"
 CONF_REGISTERED_USER_COUNT = "registered_user_count"
 CONF_MODULE_READY = "module_ready"
+CONF_RECOGNIZED_USER_ADMIN = "recognized_user_admin"
 CONF_ENROLL_STATUS = "enroll_status"
 CONF_ENROLL_PROGRESS = "enroll_progress"
 CONF_LAST_EVENT = "last_event"
@@ -88,6 +89,10 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_REGISTERED_USER_COUNT): sensor.sensor_schema(
                 icon="mdi:account-multiple",
                 accuracy_decimals=0,
+            ),
+            # Admin flag of the last recognized user (set at enroll time).
+            cv.Optional(CONF_RECOGNIZED_USER_ADMIN): binary_sensor.binary_sensor_schema(
+                icon="mdi:shield-account"
             ),
             # True once the module has answered (NID_READY or status probe).
             cv.Optional(CONF_MODULE_READY): binary_sensor.binary_sensor_schema(
@@ -167,6 +172,10 @@ async def to_code(config):
     if CONF_REGISTERED_USER_COUNT in config:
         sens = await sensor.new_sensor(config[CONF_REGISTERED_USER_COUNT])
         cg.add(var.set_registered_user_count_sensor(sens))
+
+    if CONF_RECOGNIZED_USER_ADMIN in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_RECOGNIZED_USER_ADMIN])
+        cg.add(var.set_recognized_user_admin_binary_sensor(sens))
 
     if CONF_MODULE_READY in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_MODULE_READY])

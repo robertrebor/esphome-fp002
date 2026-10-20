@@ -32,6 +32,10 @@ cards:
         name: Recognized now
         vertical: true
       - type: tile
+        entity: binary_sensor.fp002_face_recognition_recognized_user_is_admin
+        name: Admin
+        vertical: true
+      - type: tile
         entity: sensor.fp002_face_recognition_registered_user_count
         name: Users
         vertical: true
