@@ -139,8 +139,8 @@ fp002:
 # You can also call these from any other automation/lambda, e.g. a physical
 # button on the ESP32 itself, without going through Home Assistant at all:
 #   id(fp002_module).start_verify();
-#   id(fp002_module).enroll_user("Robert", false, false);         // name, admin, palm_vein -> interactive 5-direction
-#   id(fp002_module).enroll_user("Robert", false, false, true);   // ... add quick=true for single-photo instead
+#   id(fp002_module).enroll_user("name", false, false);           // name, admin, palm_vein -> interactive 5-direction
+#   id(fp002_module).enroll_user("name", false, false, true);     // ... add quick=true for single-photo instead
 #   id(fp002_module).delete_user(4, false);                 // user_id, palm_vein
 #   id(fp002_module).delete_all_users(0);                   // 0=all
 #   id(fp002_module).refresh_user_list();
