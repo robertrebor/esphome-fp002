@@ -376,6 +376,15 @@ void Fp002Component::send_enroll_step_() {
 }
 
 void Fp002Component::delete_user(uint16_t user_id, bool palm_vein) {
+  // Without the module the command would just be refused in send_command_() with a
+  // log line only - report it where the UI/HA can see it.
+  if (!this->ready_) {
+    ESP_LOGW(TAG, "Module is not ready, cannot delete user id %u", user_id);
+    this->publish_event_("Delete of user ID " + std::to_string(user_id) + " failed: " +
+                         result_name_(MR_HOST_NOT_READY));
+    this->delete_failed_callback_.call(user_id, MR_HOST_NOT_READY);
+    return;
+  }
   uint8_t mid = palm_vein ? MID_DELUSER_PALM : MID_DELUSER_FACE;
   std::vector<uint8_t> data = {
       static_cast<uint8_t>(user_id >> 8),
@@ -389,6 +398,12 @@ void Fp002Component::delete_user(uint16_t user_id, bool palm_vein) {
 }
 
 void Fp002Component::delete_all_users(uint8_t type) {
+  if (!this->ready_) {
+    ESP_LOGW(TAG, "Module is not ready, cannot delete %s", delete_type_name_(type));
+    this->publish_event_(std::string("Bulk delete failed: ") + result_name_(MR_HOST_NOT_READY));
+    this->delete_failed_callback_.call(0, MR_HOST_NOT_READY);
+    return;
+  }
   ESP_LOGI(TAG, "Deleting users (type=%u: 0=all,1=face,2=palm,3=general)", type);
   this->pending_delete_all_type_ = type;
   std::vector<uint8_t> data = {type, 0, 0, 0, 0};
@@ -421,6 +436,12 @@ const char *Fp002Component::delete_type_name_(uint8_t type) {
 }
 
 void Fp002Component::delete_user_range(uint16_t begin_id, uint16_t end_id) {
+  if (!this->ready_) {
+    ESP_LOGW(TAG, "Module is not ready, cannot delete users %u-%u", begin_id, end_id);
+    this->publish_event_(std::string("Bulk delete failed: ") + result_name_(MR_HOST_NOT_READY));
+    this->delete_failed_callback_.call(0, MR_HOST_NOT_READY);
+    return;
+  }
   ESP_LOGI(TAG, "Deleting users in range [%u, %u]", begin_id, end_id);
   this->pending_delete_all_type_ = 4;
   std::vector<uint8_t> data = {
