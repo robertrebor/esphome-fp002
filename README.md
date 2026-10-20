@@ -168,7 +168,10 @@ bulk delete, module ready / module restarted.
   up) and hints for the person being enrolled,
 - registered user ids (click one to select it for deletion), delete by id and
   delete all with a confirmation prompt,
-- event log since the page was opened.
+- event log since the page was opened,
+- English / Slovak (toggle in the header, defaults to the browser language and
+  remembers the choice; status and event texts from the firmware are
+  translated in the page, the firmware itself stays English).
 
 ```yaml
 web_server:

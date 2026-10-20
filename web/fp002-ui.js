@@ -17,6 +17,11 @@
  *     js_url: ""
  *     js_include: "fp002-ui.js"
  *
+ * The page is bilingual (English / Slovak): a toggle in the header, defaulting
+ * to the browser language, the choice is remembered in localStorage. Texts the
+ * firmware sends (enroll status, events) are translated here, so the firmware
+ * stays English-only.
+ *
  * Entity names below must match the `name:` values in your YAML (they do if
  * you kept the ones from example.yaml). Entities you didn't configure are
  * simply hidden.
@@ -47,6 +52,108 @@
   };
   const DIRECTIONS = ["center", "right", "left", "down", "up"];
   const MAX_LOG = 200;
+
+  // ---------------------------------------------------------------- i18n
+  const I18N = {
+    en: {
+      connecting: "Connecting", connected: "Connected", disconnected: "Disconnected",
+      moduleReady: "Module ready", moduleNotReady: "Module not ready",
+      lastRecognition: "Last recognition", recognizedNow: "Recognized now", nobodyNow: "Nobody recognized right now",
+      enrollTitle: "Enroll new user", name: "Name", namePh: "name", admin: "Admin", palm: "Palm vein",
+      quick: "Quick (single photo)", startEnroll: "Start enroll",
+      usersTitle: "Registered users", usersSub: "face users, click an id to select it",
+      deleteById: "Delete user by id", del: "Delete", deleteAllLabel: "Delete all users", deleteAll: "Delete all",
+      logTitle: "Event log", logSub: "(since this page was opened)", beforeLoad: "(before page load)",
+      selectForDelete: "Select for delete",
+      dirs: ["center", "right", "left", "down", "up"],
+      hintPalm: "Hold the open palm 15-20 cm in front of the module and move it slowly back and forth.",
+      hintSingle: "Look straight at the module from 45-65 cm.",
+      hintDir: (d) => `Turn your head slowly to "${d}" and hold it until the LED blinks green.`,
+      enterName: "Enter a name first", enrollStarted: (n) => `Enroll of "${n}" started`,
+      enterId: "Enter a user id",
+      confirmDelete: (palm, id) => `Delete ${palm ? "palm-vein" : "face"} user ID ${id}?`,
+      deleting: (id) => `Deleting user ID ${id}`,
+      confirmDeleteAll: (w) => `Delete ${w.toLowerCase()}? This cannot be undone.`,
+      deletingUsers: "Deleting users",
+      options: {},
+    },
+    sk: {
+      connecting: "Pripájam", connected: "Pripojené", disconnected: "Odpojené",
+      moduleReady: "Modul pripravený", moduleNotReady: "Modul nepripravený",
+      lastRecognition: "Posledné rozpoznanie", recognizedNow: "Práve rozpoznaný", nobodyNow: "Momentálne nikto nerozpoznaný",
+      enrollTitle: "Registrácia nového používateľa", name: "Meno", namePh: "meno", admin: "Administrátor",
+      palm: "Žily dlane", quick: "Rýchla (jedna fotka)", startEnroll: "Spustiť registráciu",
+      usersTitle: "Registrovaní používatelia", usersSub: "používatelia tváre, kliknutím na ID ho vyberieš",
+      deleteById: "Zmazať používateľa podľa ID", del: "Zmazať", deleteAllLabel: "Zmazať všetkých používateľov",
+      deleteAll: "Zmazať všetkých",
+      logTitle: "Log udalostí", logSub: "(od otvorenia stránky)", beforeLoad: "(pred otvorením stránky)",
+      selectForDelete: "Vybrať na zmazanie",
+      dirs: ["stred", "vpravo", "vľavo", "dole", "hore"],
+      hintPalm: "Drž otvorenú dlaň 15–20 cm pred modulom a pomaly ňou pohybuj dopredu a dozadu.",
+      hintSingle: "Pozeraj priamo do modulu zo vzdialenosti 45–65 cm.",
+      hintDir: (d) => `Pomaly otoč hlavu smerom „${d}“ a drž ju tak, kým LED neblikne nazeleno.`,
+      enterName: "Najprv zadaj meno", enrollStarted: (n) => `Registrácia „${n}“ spustená`,
+      enterId: "Zadaj ID používateľa",
+      confirmDelete: (palm, id) => `Zmazať používateľa ${palm ? "dlane" : "tváre"} s ID ${id}?`,
+      deleting: (id) => `Mažem používateľa ID ${id}`,
+      confirmDeleteAll: (w) => `Zmazať: ${w.toLowerCase()}? Nedá sa to vrátiť späť.`,
+      deletingUsers: "Mažem používateľov",
+      options: {
+        "All users": "Všetci používatelia", "Face users only": "Len používatelia tváre",
+        "Palm-vein users only": "Len používatelia dlane", "General users only": "Len bežní používatelia",
+      },
+    },
+  };
+  // Result-code names sent by the firmware (Fp002Component::result_name_).
+  const REASONS_SK = {
+    success: "úspech", "rejected by module": "modul odmietol", aborted: "prerušené", "camera failed": "chyba kamery",
+    "unknown error": "neznáma chyba", "invalid parameter": "neplatný parameter", "out of memory": "nedostatok pamäte",
+    "unknown user": "neznámy používateľ", "user limit reached": "dosiahnutý limit používateľov",
+    "face already enrolled": "tvár je už registrovaná", "liveness check failed": "kontrola živosti zlyhala",
+    timeout: "časový limit", "palm not recognized": "dlaň nerozpoznaná", "palm already enrolled": "dlaň je už registrovaná",
+    "no reply from module": "modul neodpovedá", "enroll did not finish": "registrácia sa nedokončila", error: "chyba",
+  };
+  const DELETED_SK = {
+    "all users": "všetci používatelia", "all face users": "všetci používatelia tváre",
+    "all palm-vein users": "všetci používatelia dlane", "all general users": "všetci bežní používatelia",
+    "a range of users": "rozsah používateľov",
+  };
+  let lang = "en";
+  try {
+    const saved = localStorage.getItem("fp002-ui-lang");
+    lang = saved === "sk" || saved === "en" ? saved : /^sk|^cs/i.test(navigator.language || "") ? "sk" : "en";
+  } catch (_) {
+    lang = /^sk|^cs/i.test(navigator.language || "") ? "sk" : "en";
+  }
+  const t = (k, ...a) => {
+    const v = I18N[lang][k] !== undefined ? I18N[lang][k] : I18N.en[k];
+    return typeof v === "function" ? v(...a) : v;
+  };
+  const reason = (r) => (lang === "sk" ? REASONS_SK[r] || r : r);
+
+  // Translate a status/event string coming from the firmware (English) for display.
+  function tr(text) {
+    if (lang === "en" || !text) return text;
+    const dirIdx = (d) => I18N.en.dirs.indexOf(d);
+    let m;
+    if (text === "Idle") return "Nečinné";
+    if ((m = text.match(/^Step (\d)\/5: face (\w+)$/))) return `Krok ${m[1]}/5: tvár ${I18N.sk.dirs[dirIdx(m[2])] || m[2]}`;
+    if (text === "Waiting for palm") return "Čakám na dlaň";
+    if (text === "Waiting for face (single photo)") return "Čakám na tvár (jedna fotka)";
+    if ((m = text.match(/^Done: (.*) \(ID (\d+)\)$/))) return `Hotovo: ${m[1]} (ID ${m[2]})`;
+    if ((m = text.match(/^Failed: (.*)$/))) return `Zlyhalo: ${reason(m[1])}`;
+    if (text === "Module ready") return "Modul pripravený";
+    if (text === "Module restarted") return "Modul sa reštartoval";
+    if ((m = text.match(/^Recognized: (.*) \(ID (\d+)\)$/))) return `Rozpoznaný: ${m[1]} (ID ${m[2]})`;
+    if ((m = text.match(/^Rejected: not recognized \((.*)\)$/))) return `Zamietnuté: nerozpoznaný (${reason(m[1])})`;
+    if ((m = text.match(/^Enrolled: (.*) \(ID (\d+)\)$/))) return `Zaregistrovaný: ${m[1]} (ID ${m[2]})`;
+    if ((m = text.match(/^Enroll of '(.*)' failed: (.*)$/))) return `Registrácia „${m[1]}“ zlyhala: ${reason(m[2])}`;
+    if ((m = text.match(/^Deleted user ID (\d+)$/))) return `Zmazaný používateľ ID ${m[1]}`;
+    if ((m = text.match(/^Delete of user ID (\d+) failed: (.*)$/))) return `Zmazanie používateľa ID ${m[1]} zlyhalo: ${reason(m[2])}`;
+    if ((m = text.match(/^Deleted (.*)$/))) return `Zmazaní: ${DELETED_SK[m[1]] || m[1]}`;
+    if ((m = text.match(/^Bulk delete failed: (.*)$/))) return `Hromadné mazanie zlyhalo: ${reason(m[1])}`;
+    return text;
+  }
 
   const CSS = `
 :root{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--muted:#6b7280;--line:#e3e6ea;--accent:#2563eb;
@@ -102,57 +209,61 @@ hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--text);color:var(--card);
 padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+.lang{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.lang button{background:transparent;color:var(--muted);border-radius:0;padding:3px 10px;font-size:13px}
+.lang button.on{background:var(--accent);color:#fff}
 `;
 
   const HTML = `
 <div class="fp-wrap">
   <div class="fp-head">
     <div><h1 id="fp-title">FP002 Face Recognition</h1><div class="sub" id="fp-sub">ESPHome</div></div>
-    <div class="fp-pills"><span class="pill" id="fp-conn">Connecting</span><span class="pill" id="fp-mod">Module</span></div>
+    <div class="fp-pills"><span class="pill" id="fp-conn"></span><span class="pill" id="fp-mod"></span>
+      <span class="lang"><button data-lang="en">EN</button><button data-lang="sk">SK</button></span></div>
   </div>
   <div class="fp-grid">
     <section class="card" data-need="faceRecognized userName">
-      <h2>Last recognition</h2>
+      <h2 data-i18n="lastRecognition"></h2>
       <div class="recog"><div class="avatar" id="fp-avatar">?</div>
         <div><div class="big" id="fp-name">-</div><div class="muted" id="fp-uid"></div></div></div>
       <div class="muted" id="fp-recog-state" style="margin-top:10px"></div>
     </section>
 
     <section class="card" data-need="enrollButton">
-      <h2>Enroll new user</h2>
-      <label class="field" for="fp-in-name">Name</label>
-      <input type="text" id="fp-in-name" maxlength="31" placeholder="name" autocomplete="off">
+      <h2 data-i18n="enrollTitle"></h2>
+      <label class="field" for="fp-in-name" data-i18n="name"></label>
+      <input type="text" id="fp-in-name" maxlength="31" data-i18n-ph="namePh" autocomplete="off">
       <div class="row">
-        <label class="check"><input type="checkbox" id="fp-in-admin">Admin</label>
-        <label class="check"><input type="checkbox" id="fp-in-palm">Palm vein</label>
-        <label class="check"><input type="checkbox" id="fp-in-quick">Quick (single photo)</label>
+        <label class="check"><input type="checkbox" id="fp-in-admin"><span data-i18n="admin"></span></label>
+        <label class="check"><input type="checkbox" id="fp-in-palm"><span data-i18n="palm"></span></label>
+        <label class="check"><input type="checkbox" id="fp-in-quick"><span data-i18n="quick"></span></label>
       </div>
-      <div class="row" style="margin-top:12px"><button id="fp-enroll">Start enroll</button></div>
+      <div class="row" style="margin-top:12px"><button id="fp-enroll" data-i18n="startEnroll"></button></div>
       <div class="steps" id="fp-steps"></div>
-      <div class="status" id="fp-enroll-status">Idle</div>
+      <div class="status" id="fp-enroll-status"></div>
       <div class="muted" id="fp-enroll-hint" style="margin-top:8px"></div>
     </section>
 
     <section class="card" data-need="userIds">
-      <h2>Registered users</h2>
-      <div class="big" id="fp-count">-</div><div class="muted">face users, click an id to select it</div>
+      <h2 data-i18n="usersTitle"></h2>
+      <div class="big" id="fp-count">-</div><div class="muted" data-i18n="usersSub"></div>
       <div class="chips" id="fp-chips"></div>
       <hr>
       <div data-need="deleteButton">
-        <label class="field" for="fp-del-id">Delete user by id</label>
+        <label class="field" for="fp-del-id" data-i18n="deleteById"></label>
         <div class="row"><input type="number" id="fp-del-id" min="1" max="800" style="max-width:120px">
-          <label class="check" style="margin-top:0"><input type="checkbox" id="fp-del-palm">Palm vein</label>
-          <button class="ghost" id="fp-del">Delete</button></div>
+          <label class="check" style="margin-top:0"><input type="checkbox" id="fp-del-palm"><span data-i18n="palm"></span></label>
+          <button class="ghost" id="fp-del" data-i18n="del"></button></div>
       </div>
       <div data-need="deleteAllButton">
-        <label class="field" for="fp-delall-type">Delete all users</label>
+        <label class="field" for="fp-delall-type" data-i18n="deleteAllLabel"></label>
         <div class="row"><select id="fp-delall-type" style="max-width:220px"></select>
-          <button class="danger" id="fp-delall">Delete all</button></div>
+          <button class="danger" id="fp-delall" data-i18n="deleteAll"></button></div>
       </div>
     </section>
 
     <section class="card span2" data-need="lastEvent">
-      <h2>Event log <span class="muted" style="text-transform:none;letter-spacing:0">(since this page was opened)</span></h2>
+      <h2><span data-i18n="logTitle"></span> <span class="muted" style="text-transform:none;letter-spacing:0" data-i18n="logSub"></span></h2>
       <ul class="log" id="fp-log"></ul>
     </section>
   </div>
@@ -165,6 +276,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   let lastEventSeen = null;
   let firstEvent = true;
   let resync = false;      // set after an SSE reconnect: the device resends all states
+  let connState = "connecting";
   const $ = (id) => document.getElementById(id);
 
   function toast(msg) {
@@ -190,15 +302,23 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   }
   const num = (v) => (v === undefined || v === "" || Number.isNaN(Number(v)) ? undefined : Number(v));
 
-  function addLog(text) {
+  function logText(span) {
+    span.textContent = tr(span.dataset.raw) + (span.dataset.before ? "  " + t("beforeLoad") : "");
+    const time = span.previousElementSibling;
+    if (time) time.textContent = new Date(Number(span.dataset.ts)).toLocaleTimeString(lang === "sk" ? "sk-SK" : "en-GB");
+  }
+
+  function addLog(text, beforeLoad) {
     const li = document.createElement("li");
     const time = document.createElement("time");
-    time.textContent = new Date().toLocaleTimeString();
     const span = document.createElement("span");
-    span.textContent = text;
+    span.dataset.raw = text;
+    span.dataset.ts = String(Date.now());
+    if (beforeLoad) span.dataset.before = "1";
+    li.append(time, span);
+    logText(span);
     if (/^(Recognized|Enrolled|Deleted|Module ready)/.test(text)) span.className = "t-ok";
     else if (/(Rejected|failed|restarted)/i.test(text)) span.className = "t-bad";
-    li.append(time, span);
     const log = $("fp-log");
     log.prepend(li);
     while (log.children.length > MAX_LOG) log.lastChild.remove();
@@ -220,19 +340,19 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     DIRECTIONS.forEach((d, i) => {
       const s = document.createElement("div");
       s.className = "step" + (i < progress ? " done" : "") + (running && i === progress ? " now" : "");
-      s.textContent = d;
+      s.textContent = t("dirs")[i];
       steps.append(s);
     });
     const st = $("fp-enroll-status");
-    st.textContent = status;
+    st.textContent = tr(status);
     st.className = "status" + (/^Done/.test(status) ? " ok" : /^Failed/.test(status) ? " bad" : running ? " run" : "");
     $("fp-enroll").disabled = running;
     $("fp-enroll-hint").textContent = running
       ? /palm/i.test(status)
-        ? "Hold the open palm 15-20 cm in front of the module and move it slowly back and forth."
+        ? t("hintPalm")
         : /single/i.test(status)
-        ? "Look straight at the module from 45-65 cm."
-        : `Turn your head slowly to "${DIRECTIONS[Math.min(progress, 4)]}" and hold it until the LED blinks green.`
+        ? t("hintSingle")
+        : t("hintDir", t("dirs")[Math.min(progress, 4)])
       : "";
   }
 
@@ -240,7 +360,10 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     const ready = value("moduleReady");
     const mod = $("fp-mod");
     mod.className = "pill " + (ready === true ? "ok" : "bad") + (present.has(ENTITIES.moduleReady) ? "" : " hidden");
-    mod.textContent = ready === true ? "Module ready" : "Module not ready";
+    mod.textContent = ready === true ? t("moduleReady") : t("moduleNotReady");
+    const conn = $("fp-conn");
+    conn.className = "pill" + (connState === "connected" ? " ok" : connState === "disconnected" ? " bad" : "");
+    conn.textContent = t(connState);
 
     const recognized = value("faceRecognized") === true;
     const name = value("userName");
@@ -250,7 +373,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     const av = $("fp-avatar");
     av.textContent = name ? name.trim().charAt(0).toUpperCase() : "?";
     av.classList.toggle("on", recognized);
-    $("fp-recog-state").textContent = recognized ? "Recognized now" : "Nobody recognized right now";
+    $("fp-recog-state").textContent = recognized ? t("recognizedNow") : t("nobodyNow");
 
     const count = num(value("userCount"));
     $("fp-count").textContent = count !== undefined ? count : "-";
@@ -264,7 +387,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
           const c = document.createElement("button");
           c.className = "chip";
           c.textContent = id;
-          c.title = "Select for delete";
+          c.title = t("selectForDelete");
           c.onclick = () => {
             $("fp-del-id").value = id;
             $("fp-del-palm").checked = Number(id) > 500;
@@ -274,9 +397,12 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     }
 
     const sel = state[ENTITIES.deleteAllType];
-    if (sel && Array.isArray(sel.option) && $("fp-delall-type").options.length === 0) {
-      sel.option.forEach((o) => $("fp-delall-type").append(new Option(o, o)));
+    const dsel = $("fp-delall-type");
+    if (sel && Array.isArray(sel.option) && dsel.options.length === 0) {
+      sel.option.forEach((o) => dsel.append(new Option(o, o)));
     }
+    // option value stays the device's (English) option, only the label is translated
+    for (const o of dsel.options) o.textContent = t("options")[o.value] || o.value;
 
     renderSteps();
   }
@@ -294,7 +420,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
         // The first value on connect is the event that happened before the page
         // opened; after a reconnect the device resends the current value, which
         // is only new if it differs from what we already logged.
-        if (firstEvent) addLog(`${text}  (before page load)`);
+        if (firstEvent) addLog(text, true);
         else if (!(resync && text === lastEventSeen)) addLog(text);
       }
       firstEvent = false;
@@ -305,11 +431,15 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   }
 
   function connect() {
-    const conn = $("fp-conn");
+    const setConn = (c) => {
+      if (connState !== c) {
+        connState = c;
+        render();
+      }
+    };
     const es = new EventSource("/events");
     es.addEventListener("ping", (e) => {
-      conn.className = "pill ok";
-      conn.textContent = "Connected";
+      setConn("connected");
       try {
         const p = JSON.parse(e.data || "{}");
         if (p.title) {
@@ -320,8 +450,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
       } catch (_) { /* ping without JSON */ }
     });
     es.addEventListener("state", (e) => {
-      conn.className = "pill ok";
-      conn.textContent = "Connected";
+      if (connState !== "connected") setConn("connected");
       try {
         onState(JSON.parse(e.data));
       } catch (err) {
@@ -329,8 +458,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
       }
     });
     es.onerror = () => {
-      conn.className = "pill bad";
-      conn.textContent = "Disconnected";
+      setConn("disconnected");
       resync = true;
     };
   }
@@ -339,7 +467,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   async function enroll() {
     const name = $("fp-in-name").value.trim();
     if (!name) {
-      toast("Enter a name first");
+      toast(t("enterName"));
       return;
     }
     $("fp-enroll").disabled = true;
@@ -349,7 +477,7 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
       await setSwitch(ENTITIES.newPalm, $("fp-in-palm").checked);
       await setSwitch(ENTITIES.newQuick, $("fp-in-quick").checked);
       await post(ENTITIES.enrollButton, "press");
-      toast(`Enroll of "${name}" started`);
+      toast(t("enrollStarted", name));
     } catch (err) {
       toast(String(err.message || err));
       $("fp-enroll").disabled = false;
@@ -359,16 +487,16 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   async function deleteOne() {
     const id = Number($("fp-del-id").value);
     if (!id) {
-      toast("Enter a user id");
+      toast(t("enterId"));
       return;
     }
     const palm = $("fp-del-palm").checked;
-    if (!confirm(`Delete ${palm ? "palm-vein" : "face"} user ID ${id}?`)) return;
+    if (!confirm(t("confirmDelete", palm, id))) return;
     try {
       await post(ENTITIES.deleteId, "set", { value: id });
       await setSwitch(ENTITIES.deletePalm, palm);
       await post(ENTITIES.deleteButton, "press");
-      toast(`Deleting user ID ${id}`);
+      toast(t("deleting", id));
     } catch (err) {
       toast(String(err.message || err));
     }
@@ -377,14 +505,32 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
   async function deleteAll() {
     const which = $("fp-delall-type").value;
     if (!which) return;
-    if (!confirm(`Delete ${which.toLowerCase()}? This cannot be undone.`)) return;
+    if (!confirm(t("confirmDeleteAll", t("options")[which] || which))) return;
     try {
       await post(ENTITIES.deleteAllType, "set", { option: which });
       await post(ENTITIES.deleteAllButton, "press");
-      toast("Deleting users");
+      toast(t("deletingUsers"));
     } catch (err) {
       toast(String(err.message || err));
     }
+  }
+
+  // ---------------------------------------------------------------- language
+  function applyLang() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-i18n]").forEach((el) => (el.textContent = t(el.dataset.i18n)));
+    document.querySelectorAll("[data-i18n-ph]").forEach((el) => (el.placeholder = t(el.dataset.i18nPh)));
+    document.querySelectorAll(".lang button").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
+    document.querySelectorAll("#fp-log span[data-raw]").forEach(logText);
+    render(ENTITIES.userIds);
+  }
+
+  function setLang(l) {
+    lang = l;
+    try {
+      localStorage.setItem("fp002-ui-lang", l);
+    } catch (_) { /* storage blocked - choice just isn't remembered */ }
+    applyLang();
   }
 
   // ---------------------------------------------------------------- boot
@@ -402,7 +548,8 @@ padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .
     root.innerHTML = HTML;
     document.body.prepend(root);
     renderVisibility();
-    render();
+    document.querySelectorAll(".lang button").forEach((b) => (b.onclick = () => setLang(b.dataset.lang)));
+    applyLang();
     $("fp-enroll").onclick = enroll;
     $("fp-del").onclick = deleteOne;
     $("fp-delall").onclick = deleteAll;

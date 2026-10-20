@@ -1,5 +1,6 @@
 #include "fp002.h"
 #include "esphome/core/log.h"
+#include <cinttypes>
 #include <cstring>
 
 namespace esphome {
@@ -139,7 +140,7 @@ void Fp002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Auto verify: %s", YESNO(this->auto_verify_));
   ESP_LOGCONFIG(TAG, "  Verify timeout: %us", this->verify_timeout_);
   ESP_LOGCONFIG(TAG, "  Enroll timeout: %us", this->enroll_timeout_);
-  ESP_LOGCONFIG(TAG, "  Cooldown between attempts: %ums", this->cooldown_ms_);
+  ESP_LOGCONFIG(TAG, "  Cooldown between attempts: %" PRIu32 "ms", this->cooldown_ms_);
   this->check_uart_settings(115200);
 #ifdef USE_BINARY_SENSOR
   LOG_BINARY_SENSOR("  ", "Face Recognized", this->face_recognized_binary_sensor_);
@@ -724,7 +725,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
           }
         }
       }
-      ESP_LOGI(TAG, "Registered users: %u (module reported %u): %s", found, reported_count,
+      ESP_LOGI(TAG, "Registered users: %" PRIu32 " (module reported %u): %s", found, reported_count,
                 ids_csv.empty() ? "(none)" : ids_csv.c_str());
 #ifdef USE_TEXT_SENSOR
       if (this->registered_user_ids_text_sensor_ != nullptr)
