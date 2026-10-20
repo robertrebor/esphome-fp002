@@ -91,7 +91,7 @@ Add this repo as an external component in your ESPHome YAML:
 
 ```yaml
 external_components:
-  - source: github://robertrebor/esphome-fp002@v1.0.1
+  - source: github://robertrebor/esphome-fp002@v1.0.2
     components: [fp002]
 ```
 
