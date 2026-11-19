@@ -110,7 +110,7 @@ void Fp002Component::loop() {
   }
 
   // Send a command that was queued while another one was in flight.
-  if (this->queued_.active && this->pending_cmd_ == Fp002PendingCmd::NONE) {
+  if (this->queued_.active && this->pending_cmd_ == Fp002PendingCmd::NONE && this->led_idle_()) {
     QueuedCommand q = std::move(this->queued_);
     this->queued_ = QueuedCommand{};
     ESP_LOGD(TAG, "Sending queued command 0x%02X", q.mid);
@@ -224,6 +224,24 @@ bool Fp002Component::send_command_(uint8_t mid, const std::vector<uint8_t> &data
     ESP_LOGW(TAG, "Module is not ready yet, ignoring command 0x%02X", mid);
     return false;
   }
+  if (!this->led_idle_()) {
+    // An LED frame was just written - don't put the command right behind it,
+    // queue it until the module acknowledged the LED frame (sent from loop()).
+    if (kind == Fp002PendingCmd::VERIFY)
+      return false;  // the background verify is simply re-armed later
+    if (this->queued_.active) {
+      ESP_LOGW(TAG, "LED write pending and 0x%02X already queued, ignoring new command 0x%02X", this->queued_.mid,
+               mid);
+      return false;
+    }
+    this->queued_.active = true;
+    this->queued_.mid = mid;
+    this->queued_.data = data;
+    this->queued_.kind = kind;
+    this->queued_.timeout_ms = timeout_ms;
+    ESP_LOGV(TAG, "Waiting for LED acknowledgement before command 0x%02X", mid);
+    return true;
+  }
 
   this->write_frame_(mid, data);
 
@@ -248,6 +266,8 @@ void Fp002Component::send_led_(uint8_t color, bool on) {
   // Module's switch bit is inverted versus what you'd expect: 0x00 = on, 0x01 = off.
   std::vector<uint8_t> data = {color, static_cast<uint8_t>(on ? 0x00 : 0x01)};
   this->write_frame_(MID_LED_CONTROL, data);
+  this->led_acks_pending_++;
+  this->last_led_write_ms_ = millis();
 }
 
 void Fp002Component::start_led_blinks_(uint8_t color, uint8_t count) {
@@ -292,6 +312,17 @@ void Fp002Component::update_led_blinks_() {
     this->led_on_now_ = true;
     this->led_next_toggle_ms_ = millis() + LED_BLINK_ON_MS;
   }
+}
+
+bool Fp002Component::led_idle_() {
+  if (this->led_acks_pending_ == 0)
+    return true;
+  if (millis() - this->last_led_write_ms_ > LED_ACK_TIMEOUT_MS) {
+    // No acknowledgement came (or it got lost) - don't wait forever.
+    this->led_acks_pending_ = 0;
+    return true;
+  }
+  return false;
 }
 
 void Fp002Component::set_led_steady_(uint8_t color) {
@@ -918,6 +949,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
   }
   if (mid == MID_LED_CONTROL) {
     ESP_LOGV(TAG, "Module acknowledged LED control (result=0x%02X)", result);
+    if (this->led_acks_pending_ > 0)
+      this->led_acks_pending_--;
     return;
   }
 

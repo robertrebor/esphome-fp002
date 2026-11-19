@@ -367,7 +367,10 @@ the previous one finishes), so it never blocks the rest of the device. After
 a verify the LED blinks **green 2x** when someone was recognized and **red
 2x** when a face/palm was seen but rejected (`recognition_led: false` turns
 this off); an empty-scene timeout gives no blink. No new verify is started
-while a blink is running, so LED frames never hit a running verify. `quick: true` skips all of this
+while a blink is running, so LED frames never hit a running verify, and a
+command is never written right behind an LED frame: it waits until the module
+acknowledged the LED write (or 300 ms passed) - on real hardware a command
+sent directly after an LED frame was occasionally dropped by the module. `quick: true` skips all of this
 and falls back to the original single-frame `MID_ENROLL_SINGLE` command.
 
 **`MID_DELUSER` command byte vs `user_type` field.** The manual's table for

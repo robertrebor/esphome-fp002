@@ -284,6 +284,13 @@ class Fp002Component : public Component, public uart::UARTDevice {
   // run in the gaps between commands without the "module busy" guard - verify is
   // not started while a blink runs, so no LED frames hit a running verify.
   static const uint8_t LED_NONE = 0xFF;
+  // A command written right behind an LED frame can get lost (seen on real
+  // hardware: LED went red, the enroll that followed never started). So after
+  // an LED write the next command waits until the module acknowledged the LED
+  // frame(s), or LED_ACK_TIMEOUT_MS passed if no acknowledgement comes.
+  uint8_t led_acks_pending_{0};
+  uint32_t last_led_write_ms_{0};
+  static const uint32_t LED_ACK_TIMEOUT_MS = 300;
   uint8_t led_steady_{LED_NONE};      // wanted steady color (LED_NONE = off)
   uint8_t led_lit_steady_{LED_NONE};  // steady color currently lit on the module
   bool recognition_led_{true};
@@ -342,6 +349,8 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void update_led_blinks_();
   /// Set the steady LED color (LED_NONE = off). Cancels a running blink.
   void set_led_steady_(uint8_t color);
+  /// True when no LED frame is waiting for its acknowledgement (or it timed out).
+  bool led_idle_();
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *face_recognized_binary_sensor_{nullptr};
