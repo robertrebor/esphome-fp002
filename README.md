@@ -57,8 +57,9 @@ Enrollment defaults to the module's **interactive 5-direction enroll**
 (`MID_ENROLL`: center, right, left, down, up) rather than a single photo, for
 better recognition accuracy. Since there's no screen to show "turn left /
 turn right" prompts, the module's own status LED is used as the feedback
-channel instead: it blinks **green once per captured direction** and
-**green 3x** on completion, or **red 2x** on failure - wire `on_enroll_success`
+channel instead: it is **steady red** while the module waits for the face,
+blinks **green once per captured direction** (then back to red) and **goes
+off** when the enroll ends - on success or failure; wire `on_enroll_success`
 / `on_enroll_failed` to whatever notification you want in Home Assistant, and
 have the person slowly turn their head and pause after each blink. Pass
 `quick: true` to the `add_user` service (or `quick=true` to `enroll_user()`)
@@ -279,8 +280,10 @@ angle detection regardless of which direction is currently being captured.
    **New User Name**, flip **New User Is Admin** on if needed, and leave
    **New User Quick Enroll** off for the more accurate interactive enroll.
    Then press **Enroll New User**.
-3. Have the person look straight at the module (center/front). The LED
-   blinks **green once** as soon as that direction is captured.
+3. Have the person look straight at the module (center/front). The LED is
+   **steady red** while the module waits for the face and blinks **green
+   once** as soon as that direction is captured, then turns red again for
+   the next one.
 4. One direction at a time - this component asks for them in the order
    **center -> right -> left -> down -> up** - have the person slowly turn
    or tilt their head into position (see the picture above) and **hold it
@@ -290,11 +293,12 @@ angle detection regardless of which direction is currently being captured.
    to the next direction.
 5. Only pitch (nod up/down) and yaw (turn left/right) - never roll/tilt the
    head sideways, for any of the 5 directions (the red-X picture above).
-6. After the 5th direction (up) is captured, the LED blinks **green 3x** and
-   the module assigns the new user their id - `on_enroll_success` fires
+6. After the 5th direction (up) is captured, the LED blinks **green** once
+   more and **goes off**, and the module assigns the new user their id - `on_enroll_success` fires
    (check the log, or whatever automation you wired it to), and
    `registered_user_ids` refreshes automatically so you can see the new id.
-7. If the LED instead blinks **red 2x**, something failed partway through
+7. If the LED instead **goes off** without that last green blink and Enroll
+   Status shows `Failed: ...`, something failed partway through
    (moved too fast, bad lighting, one direction timed out) - check
    `on_enroll_failed` / the log for the reason code. A failed attempt
    doesn't leave anything partially registered, so just call `add_user`
@@ -325,9 +329,10 @@ reports welcome.
    front of the camera. Move it **slowly back and forth** (towards the module
    and away from it) until the enroll completes. The module waits up to
    `enroll_timeout` seconds (15 by default) for a usable palm.
-4. There are no per-direction blinks for a palm: the LED blinks **green 3x**
-   on success or **red 2x** on failure, and `on_enroll_success` /
-   `on_enroll_failed` fire the same way as for a face.
+4. There are no per-direction blinks for a palm: the LED is **steady red**
+   while the module waits for the palm, blinks **green** once on success and
+   **goes off** when the enroll ends (on failure without the green blink);
+   `on_enroll_success` / `on_enroll_failed` fire the same way as for a face.
 5. Palm users get ids from **501 to 800** (300 users max), separate from face
    ids (1-500). The new id is in the log and in the `user_id` argument of
    `on_enroll_success`.
@@ -354,11 +359,15 @@ on for its own REPLY - there's no single "just do it" command. Normally
 you'd pair that with a live UI showing "turn left / turn right / done".
 Since a Home Assistant service call has no such UI, this component instead
 drives the module's own status LED (`MID_LED_CONTROL`) as the feedback
-channel: green blink after each captured direction, 3 green blinks on
-completion, 2 red blinks on failure. The LED writes are fire-and-forget and
-non-blocking (`loop()` advances a small blink state machine and only sends
-the next direction's command once the blinks for the previous one finish),
-so it never blocks the rest of the device. `quick: true` skips all of this
+channel: steady red while waiting for the face, a green blink after each
+captured direction (then red again), LED off when the enroll ends. The LED
+writes are fire-and-forget and non-blocking (`loop()` advances a small blink
+state machine and only sends the next direction's command once the blink for
+the previous one finishes), so it never blocks the rest of the device. After
+a verify the LED blinks **green 2x** when someone was recognized and **red
+2x** when a face/palm was seen but rejected (`recognition_led: false` turns
+this off); an empty-scene timeout gives no blink. No new verify is started
+while a blink is running, so LED frames never hit a running verify. `quick: true` skips all of this
 and falls back to the original single-frame `MID_ENROLL_SINGLE` command.
 
 **`MID_DELUSER` command byte vs `user_type` field.** The manual's table for

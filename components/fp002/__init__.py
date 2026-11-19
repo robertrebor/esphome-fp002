@@ -44,6 +44,7 @@ CONF_AUTO_VERIFY = "auto_verify"
 CONF_VERIFY_TIMEOUT = "verify_timeout"
 CONF_ENROLL_TIMEOUT = "enroll_timeout"
 CONF_COOLDOWN = "cooldown"
+CONF_RECOGNITION_LED = "recognition_led"
 CONF_FACE_RECOGNIZED_BINARY_SENSOR = "face_recognized_binary_sensor"
 CONF_RECOGNIZED_USER_NAME = "recognized_user_name"
 CONF_RECOGNIZED_USER_ID = "recognized_user_id"
@@ -85,6 +86,9 @@ CONFIG_SCHEMA = (
             # How long to wait after a command finishes before starting the next
             # auto-verify attempt.
             cv.Optional(CONF_COOLDOWN, default="2s"): cv.positive_time_period_milliseconds,
+            # Blink the module's status LED after a verify: green 2x when recognized,
+            # red 2x when a face/palm was seen but rejected (not on empty timeouts).
+            cv.Optional(CONF_RECOGNITION_LED, default=True): cv.boolean,
             cv.Optional(CONF_FACE_RECOGNIZED_BINARY_SENSOR): binary_sensor.binary_sensor_schema(),
             cv.Optional(CONF_RECOGNIZED_USER_NAME): text_sensor.text_sensor_schema(),
             cv.Optional(CONF_RECOGNIZED_USER_ID): sensor.sensor_schema(
@@ -168,6 +172,7 @@ async def to_code(config):
     cg.add(var.set_verify_timeout(config[CONF_VERIFY_TIMEOUT]))
     cg.add(var.set_enroll_timeout(config[CONF_ENROLL_TIMEOUT]))
     cg.add(var.set_cooldown_ms(config[CONF_COOLDOWN].total_milliseconds))
+    cg.add(var.set_recognition_led(config[CONF_RECOGNITION_LED]))
 
     if CONF_FACE_RECOGNIZED_BINARY_SENSOR in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_FACE_RECOGNIZED_BINARY_SENSOR])

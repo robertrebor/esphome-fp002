@@ -93,7 +93,7 @@ void Fp002Component::loop() {
     // blocking auto_verify indefinitely - make sure it's reported as a failure.
     if (timed_out_mid == MID_ENROLL || timed_out_mid == MID_ENROLL_SINGLE) {
       this->interactive_enroll_active_ = false;
-      this->start_led_blinks_(FP002_LED_RED, 2);
+      this->set_led_steady_(LED_NONE);  // enroll ended -> LED off
       this->publish_enroll_status_("Failed: no reply from module", 0);
       this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: no reply from module");
       this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
@@ -148,6 +148,7 @@ void Fp002Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Verify timeout: %us", this->verify_timeout_);
   ESP_LOGCONFIG(TAG, "  Enroll timeout: %us", this->enroll_timeout_);
   ESP_LOGCONFIG(TAG, "  Cooldown between attempts: %" PRIu32 "ms", this->cooldown_ms_);
+  ESP_LOGCONFIG(TAG, "  Recognition LED: %s", YESNO(this->recognition_led_));
 #ifdef USE_BINARY_SENSOR
   LOG_BINARY_SENSOR("  ", "Face Recognized", this->face_recognized_binary_sensor_);
   LOG_BINARY_SENSOR("  ", "Module Ready", this->module_ready_binary_sensor_);
@@ -252,6 +253,11 @@ void Fp002Component::send_led_(uint8_t color, bool on) {
 void Fp002Component::start_led_blinks_(uint8_t color, uint8_t count) {
   if (count == 0)
     return;
+  // The blink replaces the steady color for its duration (restored at the end).
+  if (this->led_lit_steady_ != LED_NONE) {
+    this->send_led_(this->led_lit_steady_, false);
+    this->led_lit_steady_ = LED_NONE;
+  }
   this->led_blink_color_ = color;
   this->led_blinks_target_ = count;
   this->led_blinks_done_ = 0;
@@ -273,6 +279,11 @@ void Fp002Component::update_led_blinks_() {
     this->led_blinks_done_++;
     if (this->led_blinks_done_ >= this->led_blinks_target_) {
       this->led_blink_active_ = false;
+      // Back to the steady color, if any (e.g. red while an enroll waits).
+      if (this->led_steady_ != LED_NONE) {
+        this->send_led_(this->led_steady_, true);
+        this->led_lit_steady_ = this->led_steady_;
+      }
       return;
     }
     this->led_next_toggle_ms_ = millis() + LED_BLINK_OFF_MS;
@@ -283,7 +294,32 @@ void Fp002Component::update_led_blinks_() {
   }
 }
 
+void Fp002Component::set_led_steady_(uint8_t color) {
+  if (this->led_blink_active_) {
+    // Cancel the running blink so its frames don't overlap the next command.
+    if (this->led_on_now_)
+      this->send_led_(this->led_blink_color_, false);
+    this->led_blink_active_ = false;
+    this->led_on_now_ = false;
+  }
+  this->led_steady_ = color;
+  if (this->led_lit_steady_ == color)
+    return;
+  if (this->led_lit_steady_ != LED_NONE)
+    this->send_led_(this->led_lit_steady_, false);
+  if (color != LED_NONE)
+    this->send_led_(color, true);
+  this->led_lit_steady_ = color;
+}
+
 void Fp002Component::start_verify() {
+  // Don't start a verify under a running LED blink: the blink frames would hit
+  // the module while it's verifying. The caller (auto_verify loop, presence
+  // sensor interval) simply tries again later.
+  if (this->led_blink_active_) {
+    ESP_LOGV(TAG, "LED feedback still running, skipping verify");
+    return;
+  }
   std::vector<uint8_t> data = {0x00, this->verify_timeout_};  // pd_rightaway (deprecated), timeout
   ESP_LOGV(TAG, "Sending MID_VERIFY (timeout=%us)", this->verify_timeout_);
   if (this->send_command_(MID_VERIFY, data, Fp002PendingCmd::VERIFY,
@@ -327,16 +363,19 @@ void Fp002Component::enroll_user(const std::string &user_name, bool admin, bool 
               palm_vein ? "palm-vein" : "face", user_name.c_str(), admin ? "yes" : "no", use_timeout);
 
     this->publish_enroll_status_(palm_vein ? "Waiting for palm" : "Waiting for face (single photo)", 0);
+    this->set_led_steady_(FP002_LED_RED);  // red = waiting for the face/palm
     this->send_command_(MID_ENROLL_SINGLE, data, Fp002PendingCmd::ENROLL,
                          (static_cast<uint32_t>(use_timeout) + 5) * 1000UL);
     return;
   }
 
   // Interactive 5-direction enroll (the new default for face users): one
-  // MID_ENROLL command per direction, each waiting for its own REPLY, with a
-  // green LED blink after each captured direction and 3 blinks on completion.
+  // MID_ENROLL command per direction, each waiting for its own REPLY. The LED is
+  // steady red while waiting for the face, blinks green after each captured
+  // direction (then back to red) and goes off when the enroll ends.
   ESP_LOGI(TAG, "Enrolling new face user '%s' interactively (admin=%s, %us/direction)", user_name.c_str(),
             admin ? "yes" : "no", use_timeout);
+  this->set_led_steady_(FP002_LED_RED);
   this->interactive_enroll_active_ = true;
   this->enroll_direction_index_ = 0;
   this->enroll_step_timeout_s_ = use_timeout;
@@ -354,6 +393,7 @@ void Fp002Component::send_enroll_step_() {
     // clears interactive_enroll_active_), but don't loop forever if it does.
     ESP_LOGW(TAG, "Interactive enroll ran past 5 directions without finishing, aborting");
     this->interactive_enroll_active_ = false;
+    this->set_led_steady_(LED_NONE);
     this->publish_enroll_status_("Failed: enroll did not finish", 0);
     this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
     return;
@@ -652,6 +692,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       }
       this->last_verify_matched_ = true;
       this->last_recognized_id_ = user_id;
+      if (this->recognition_led_)
+        this->start_led_blinks_(FP002_LED_GREEN, 2);
       this->face_recognized_callback_.call(user_id, user_name, admin);
     } else {
       ESP_LOGD(TAG, "Verify finished without a match (result=0x%02X)", result);
@@ -661,6 +703,9 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 #endif
       if (this->verify_face_seen_ || result == MR_FAILED4_LIVENESSCHECK || result == MR_FAILED4_UNKNOWN_HANDUSER) {
         this->publish_event_(std::string("Rejected: not recognized (") + result_name_(result) + ")");
+        // Only a real rejection (a face/palm was there), not an empty-scene timeout.
+        if (this->recognition_led_)
+          this->start_led_blinks_(FP002_LED_RED, 2);
       }
       this->last_verify_matched_ = false;
       this->face_rejected_callback_.call(result);
@@ -685,7 +730,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
 
       if (result == MR_SUCCESS) {
         ESP_LOGI(TAG, "Enrolled '%s' successfully as user id %u", this->pending_enroll_name_.c_str(), user_id);
-        this->start_led_blinks_(FP002_LED_GREEN, 3);
+        this->set_led_steady_(LED_NONE);  // enroll ended -> LED off after this blink
+        this->start_led_blinks_(FP002_LED_GREEN, 1);
         this->publish_enroll_status_("Done: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")",
                                      NUM_ENROLL_DIRECTIONS);
         this->publish_event_("Enrolled: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")");
@@ -693,7 +739,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
         this->refresh_user_list(false);
       } else {
         ESP_LOGW(TAG, "Enroll of '%s' failed (result=0x%02X)", this->pending_enroll_name_.c_str(), result);
-        this->start_led_blinks_(FP002_LED_RED, 2);
+        this->set_led_steady_(LED_NONE);  // enroll ended -> LED off
         this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
         this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
         this->enroll_failed_callback_.call(result);
@@ -702,7 +748,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       this->pending_cmd_ = Fp002PendingCmd::NONE;
       this->last_command_done_ms_ = millis();
       ESP_LOGW(TAG, "Enroll reply too short (result=0x%02X)", result);
-      this->start_led_blinks_(FP002_LED_RED, 2);
+      this->set_led_steady_(LED_NONE);  // enroll ended -> LED off
       this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
       this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
       this->enroll_failed_callback_.call(result);
@@ -719,7 +765,7 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       ESP_LOGW(TAG, "Interactive enroll of '%s' failed on direction %u/5 (result=0x%02X)",
                 this->pending_enroll_name_.c_str(), this->enroll_direction_index_ + 1, result);
       this->interactive_enroll_active_ = false;
-      this->start_led_blinks_(FP002_LED_RED, 2);
+      this->set_led_steady_(LED_NONE);  // enroll ended -> LED off
       this->publish_enroll_status_(std::string("Failed: ") + result_name_(result), 0);
       this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: " + result_name_(result));
       this->enroll_failed_callback_.call(result);
@@ -734,7 +780,8 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       ESP_LOGI(TAG, "Enrolled '%s' successfully as user id %u (interactive, bitmap=0x%02X)",
                 this->pending_enroll_name_.c_str(), user_id, face_bitmap);
       this->interactive_enroll_active_ = false;
-      this->start_led_blinks_(FP002_LED_GREEN, 3);
+      this->set_led_steady_(LED_NONE);  // enroll ended -> LED off after this blink
+      this->start_led_blinks_(FP002_LED_GREEN, 1);
       this->publish_enroll_status_("Done: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")",
                                    NUM_ENROLL_DIRECTIONS);
       this->publish_event_("Enrolled: " + this->pending_enroll_name_ + " (ID " + std::to_string(user_id) + ")");

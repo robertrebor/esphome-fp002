@@ -39,8 +39,8 @@ api:
     # can delete this whole `api: services:` block - it's independent of them.
     #
     # By default this drives the module's interactive 5-direction enroll (better
-    # accuracy - the module's LED blinks green once per captured direction, 3x on
-    # completion, red 2x on failure). Set quick=true for a single-photo enroll
+    # accuracy - the module's LED is red while waiting for the face, blinks green
+    # once per captured direction and goes off when the enroll ends). Set quick=true for a single-photo enroll
     # instead (faster, less robust). Palm vein always uses single-photo, quick or
     # not, since the module has no interactive mode for it.
     - service: add_user
@@ -99,6 +99,7 @@ fp002:
   verify_timeout: 5       # seconds the module waits for a face per verify attempt (max 255)
   enroll_timeout: 15      # seconds the module waits for a face per enroll attempt (max 255)
   cooldown: 2s            # pause between attempts
+  recognition_led: true   # LED after a verify: green 2x recognized, red 2x rejected
 
   # --- entities, remove any you don't want ---
   face_recognized_binary_sensor:

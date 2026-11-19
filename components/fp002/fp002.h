@@ -104,6 +104,7 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void set_verify_timeout(uint8_t seconds) { this->verify_timeout_ = seconds; }
   void set_cooldown_ms(uint32_t cooldown_ms) { this->cooldown_ms_ = cooldown_ms; }
   void set_enroll_timeout(uint8_t seconds) { this->enroll_timeout_ = seconds; }
+  void set_recognition_led(bool recognition_led) { this->recognition_led_ = recognition_led; }
 
 #ifdef USE_BINARY_SENSOR
   void set_face_recognized_binary_sensor(binary_sensor::BinarySensor *bs) {
@@ -167,8 +168,9 @@ class Fp002Component : public Component, public uart::UARTDevice {
 
   /// Enroll a new user. By default this drives the module's interactive 5-direction
   /// enroll (MID_ENROLL: center, right, left, down, up) for better recognition
-  /// accuracy than a single photo - the module's status LED blinks green once per
-  /// captured direction and 3x on completion (red 2x on failure), so point the
+  /// accuracy than a single photo - the module's status LED is steady red while it
+  /// waits for the face, blinks green once per captured direction (then back to
+  /// red) and goes off when the enroll ends (success or failure), so point the
   /// person at the camera and have them slowly follow the blinks/turn as prompted
   /// by whatever you wire to on_enroll_success/on_enroll_failed.
   /// Palm-vein users always use the single-frame command (MID_ENROLL_SINGLE) since
@@ -274,9 +276,17 @@ class Fp002Component : public Component, public uart::UARTDevice {
   uint8_t enroll_step_timeout_s_{15};
   static const uint8_t NUM_ENROLL_DIRECTIONS = 5;
 
-  // Non-blocking LED blink feedback (MID_LED_CONTROL), used for enroll progress/
-  // success/failure. Fire-and-forget: doesn't go through pending_cmd_, so it can
-  // run in the gaps between enroll commands without the "module busy" guard.
+  // Non-blocking LED feedback (MID_LED_CONTROL): a steady color (red while an
+  // enroll waits for the face/palm) plus short blinks on top of it (green per
+  // captured enroll direction, green/red after a verify). A blink turns the steady
+  // color off and restores it when done; changing the steady color cancels a
+  // running blink. Fire-and-forget: doesn't go through pending_cmd_, so it can
+  // run in the gaps between commands without the "module busy" guard - verify is
+  // not started while a blink runs, so no LED frames hit a running verify.
+  static const uint8_t LED_NONE = 0xFF;
+  uint8_t led_steady_{LED_NONE};      // wanted steady color (LED_NONE = off)
+  uint8_t led_lit_steady_{LED_NONE};  // steady color currently lit on the module
+  bool recognition_led_{true};
   bool led_blink_active_{false};
   uint8_t led_blink_color_{0};
   uint8_t led_blinks_target_{0};
@@ -330,6 +340,8 @@ class Fp002Component : public Component, public uart::UARTDevice {
   /// advanced from loop() via update_led_blinks_().
   void start_led_blinks_(uint8_t color, uint8_t count);
   void update_led_blinks_();
+  /// Set the steady LED color (LED_NONE = off). Cancels a running blink.
+  void set_led_steady_(uint8_t color);
 
 #ifdef USE_BINARY_SENSOR
   binary_sensor::BinarySensor *face_recognized_binary_sensor_{nullptr};
