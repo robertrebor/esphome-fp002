@@ -98,6 +98,12 @@ void Fp002Component::loop() {
       this->publish_event_("Enroll of '" + this->pending_enroll_name_ + "' failed: no reply from module");
       this->enroll_failed_callback_.call(MR_FAILED4_TIMEOUT);
     }
+    // Same for a single-user delete: report it instead of failing silently.
+    if (timed_out_mid == MID_DELUSER_FACE || timed_out_mid == MID_DELUSER_PALM) {
+      this->publish_event_("Delete of user ID " + std::to_string(this->pending_delete_user_id_) +
+                           " failed: no reply from module");
+      this->delete_failed_callback_.call(this->pending_delete_user_id_, MR_FAILED4_TIMEOUT);
+    }
   }
 
   // Ready probe: covers an ESP32-only restart (OTA etc.) where the still powered
@@ -465,7 +471,7 @@ void Fp002Component::delete_user(uint16_t user_id, bool palm_vein) {
   ESP_LOGI(TAG, "Deleting %s user id %u", palm_vein ? "palm-vein" : "face", user_id);
   this->pending_delete_user_id_ = user_id;
   this->pending_delete_is_palm_ = palm_vein;
-  this->send_command_(mid, data, Fp002PendingCmd::DELETE_USER, 2000);
+  this->send_command_(mid, data, Fp002PendingCmd::DELETE_USER, 5000);  // manual 4.3.9: wait up to 5 s
 }
 
 void Fp002Component::delete_all_users(uint8_t type) {
