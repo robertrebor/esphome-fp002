@@ -82,12 +82,69 @@ Pinout (module -> ESP32):
 | 2 GND | Ground | Common ground with the ESP32 |
 | 3 TXD | Module -> host, TTL | ESP32 RX pin |
 | 4 RXD | Host -> module, TTL | ESP32 TX pin |
-| 5 IR | IR presence output | Not used by this component yet |
-| 6 VCC | IR sensor power, 3-5V | Optional, only if you wire pin 5 |
+| 5 IR | IR presence output | Optional: any free GPIO (GPIO4 below), see [IR presence sensor](#ir-presence-sensor-optional) |
+| 6 VCC | IR sensor power, 3-5V | Optional: ESP32 3V3, only if you wire pin 5 |
 
 The module draws up to ~200mA at 4.5-12V, so it will very likely need its
 own supply rather than the ESP32's onboard 3.3V regulator - check your
-board's regulator headroom before relying on it.
+board's regulator headroom before relying on it. Tested on real hardware:
+feeding the module from the 5V pin of a USB-powered ESP32 DevKit worked
+at first, but while the module's IR LEDs were active the ESP32 kept
+dropping off WiFi and OTA uploads stalled. Give the module its own 5V
+(ideally ~5.2V, short solid wires, common ground with the ESP32).
+
+## IR presence sensor (optional)
+
+Besides the camera, the module has a separate low-power IR proximity
+sensor: pin 6 powers it (3-5V), pin 5 goes high while someone is in front
+of the module (manual: up to ~70 cm). By default (`auto_verify: true`) the
+component keeps the module verifying all the time - the module then runs
+at ~200mA, gets warm and flashes its IR LEDs at everyone walking by. With
+the IR sensor wired up, recognition only runs while someone is actually
+there and the module idles in standby (~38mA) the rest of the time.
+
+Wiring: pin 6 (VCC IR) -> ESP32 **3V3** (so the output is 3.3V and safe
+for the GPIO), pin 5 (IR) -> a free GPIO, e.g. GPIO4. On real hardware
+the output gives ~1-1.5 s pulses on movement and stays high while a
+person keeps standing in front of it, hence the `delayed_off` filter.
+
+```yaml
+fp002:
+  # ...
+  auto_verify: false      # recognition is started by the presence sensor below
+
+binary_sensor:
+  - platform: gpio
+    id: presence
+    name: "Presence"
+    device_class: occupancy
+    pin:
+      number: GPIO4
+      mode:
+        input: true
+        pulldown: true      # keeps the pin low if the output ever floats
+    filters:
+      - delayed_off: 5s     # bridge the gaps between the ~1-1.5 s pulses
+    on_press:
+      - lambda: id(fp002_module).start_verify();   # someone came -> recognize
+
+interval:
+  # While someone stays in front and wasn't recognized yet, try again.
+  # start_verify() skips itself if the module is busy (verify/enroll/delete)
+  # or an LED blink is still running.
+  - interval: 8s
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: presence
+          then:
+            - lambda: id(fp002_module).start_verify();
+```
+
+`Presence` also shows up in Home Assistant as an occupancy sensor
+("someone is standing at the door"). Enrolling, deleting and the web
+dashboard work the same either way - only the background recognition is
+triggered differently. Going back is just `auto_verify: true`.
 
 ## Installation
 

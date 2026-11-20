@@ -8,8 +8,8 @@
 #   GND (pin2)  -> common ground with the ESP32
 #   TXD (pin3)  -> ESP32 RX pin  (GPIO16 below)
 #   RXD (pin4)  -> ESP32 TX pin  (GPIO17 below)
-#   IR  (pin5)  -> optional, not used by this component yet
-#   VCC (pin6)  -> 3-5V for the IR sensor, if you wire it up
+#   IR  (pin5)  -> optional: free GPIO (GPIO4 in the commented-out Presence block at the end)
+#   VCC (pin6)  -> optional: ESP32 3V3 (powers the IR sensor, output is then 3.3V)
 #
 # The fp002 component is downloaded from GitHub at compile time (see
 # `external_components` below), pinned to a release - change the version
@@ -96,6 +96,7 @@ fp002:
   id: fp002_module
   uart_id: fp002_uart
   auto_verify: true       # keep re-issuing MID_VERIFY so recognition runs continuously
+                          # (set to false if you use the IR Presence sensor at the end)
   verify_timeout: 5       # seconds the module waits for a face per verify attempt (max 255)
   enroll_timeout: 15      # seconds the module waits for a face per enroll attempt (max 255)
   cooldown: 2s            # pause between attempts
@@ -268,3 +269,34 @@ button:
           auto idx = id(delete_all_type).active_index();
           uint8_t type = idx.has_value() ? (uint8_t) idx.value() : 0;
           id(fp002_module).request_delete_all_users(type);
+
+# --- Optional: IR presence sensor of the module (see README "IR presence
+# sensor"). Wire pin5 (IR) -> GPIO4 and pin6 (VCC IR) -> 3V3, set
+# `auto_verify: false` above and uncomment this block: recognition then only
+# runs while someone is in front of the module, which otherwise idles in
+# standby (~38 mA instead of ~200 mA).
+#
+# binary_sensor:
+#   - platform: gpio
+#     id: presence
+#     name: "Presence"
+#     device_class: occupancy
+#     pin:
+#       number: GPIO4
+#       mode:
+#         input: true
+#         pulldown: true
+#     filters:
+#       - delayed_off: 5s   # the sensor gives ~1-1.5 s pulses on movement
+#     on_press:
+#       - lambda: id(fp002_module).start_verify();   # someone came -> recognize
+#
+# interval:
+#   # While someone stays in front and wasn't recognized yet, try again.
+#   - interval: 8s
+#     then:
+#       - if:
+#           condition:
+#             binary_sensor.is_on: presence
+#           then:
+#             - lambda: id(fp002_module).start_verify();
