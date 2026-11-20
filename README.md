@@ -87,11 +87,7 @@ Pinout (module -> ESP32):
 
 The module draws up to ~200mA at 4.5-12V, so it will very likely need its
 own supply rather than the ESP32's onboard 3.3V regulator - check your
-board's regulator headroom before relying on it. Tested on real hardware:
-feeding the module from the 5V pin of a USB-powered ESP32 DevKit worked
-at first, but while the module's IR LEDs were active the ESP32 kept
-dropping off WiFi and OTA uploads stalled. Give the module its own 5V
-(ideally ~5.2V, short solid wires, common ground with the ESP32).
+board's regulator headroom before relying on it.
 
 ## IR presence sensor (optional)
 
