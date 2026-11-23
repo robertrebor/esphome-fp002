@@ -138,9 +138,11 @@ fp002:
     # Example for later, once you decide on an action:
     # - switch.turn_on: door_relay
   on_face_rejected:
+    # face_seen: true when someone was in front of the module (same rule as the
+    # red LED blink), false for an empty-scene timeout
     - logger.log:
-        format: "Verify attempt finished without a match (reason=0x%02X)"
-        args: ["reason"]
+        format: "Verify attempt finished without a match (reason=0x%02X, face_seen=%d)"
+        args: ["reason", "face_seen"]
 
   on_enroll_success:
     - logger.log:
@@ -300,3 +302,13 @@ button:
 #             binary_sensor.is_on: presence
 #           then:
 #             - lambda: id(fp002_module).start_verify();
+
+# --- Optional: buzzer feedback (see README "Buzzer feedback"). An active
+# buzzer on GPIO13: add the output below, then add the beeps to the
+# `enroll_progress:` entity (`on_value`) and to `on_face_recognized` /
+# `on_face_rejected` in the fp002 block above, as shown in the README.
+#
+# output:
+#   - platform: gpio
+#     pin: GPIO13
+#     id: buzzer

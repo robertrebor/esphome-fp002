@@ -39,6 +39,8 @@ very welcome, that's the point of this thread.
   `text_sensor` with the recognized user's name, a `sensor` with their
   numeric id, plus `on_face_recognized` / `on_face_rejected` automation
   triggers - wire these to a relay/lock, a notification, whatever you need.
+  `on_face_rejected` gets `reason` and `face_seen` (true when someone was
+  actually in front of the module, false for an empty-scene timeout).
 - **Enroll / delete users directly from Home Assistant**, no companion app,
   no vendor Windows tool required, no Developer Tools/Actions either: it's a
   handful of regular entities (a text box, some toggles, buttons) that show
@@ -141,6 +143,60 @@ interval:
 ("someone is standing at the door"). Enrolling, deleting and the web
 dashboard work the same either way - only the background recognition is
 triggered differently. Going back is just `auto_verify: true`.
+
+## Buzzer feedback (optional)
+
+The module's LED is hard to see while you turn your head during the
+5-direction enroll, so a small buzzer on a free GPIO helps. Everything is
+plain ESPHome automations on the component's triggers - no extra code in
+the component. Example for an **active** buzzer on GPIO13 (one that beeps
+by itself when powered; drive it through a transistor if it draws more than
+~12 mA):
+
+```yaml
+output:
+  - platform: gpio
+    pin: GPIO13
+    id: buzzer
+
+fp002:
+  # ...
+  enroll_progress:
+    name: "Enroll Progress"
+    on_value:                      # +1 per captured direction = green LED blink
+      - if:
+          condition:
+            lambda: 'return x > 0;'  # 0 = enroll just started, no beep
+          then:
+            - output.turn_on: buzzer
+            - delay: 120ms
+            - output.turn_off: buzzer
+  on_face_recognized:              # 2 short beeps
+    - output.turn_on: buzzer
+    - delay: 100ms
+    - output.turn_off: buzzer
+    - delay: 100ms
+    - output.turn_on: buzzer
+    - delay: 100ms
+    - output.turn_off: buzzer
+  on_face_rejected:                # 1 long beep, only if someone was there
+    - if:
+        condition:
+          lambda: 'return face_seen;'
+        then:
+          - output.turn_on: buzzer
+          - delay: 800ms
+          - output.turn_off: buzzer
+```
+
+`face_seen` follows exactly the rule of the red LED blink and the
+"Rejected" event, so the long beep never sounds for an empty-scene timeout
+(e.g. the IR presence sensor reacting to someone walking past). For a
+**passive** buzzer use an `ledc` output and set a frequency
+(`output.ledc.set_frequency` + `output.set_level: 50%`) instead of
+`output.turn_on`. With the IR presence sensor and its 8 s retry interval, a
+person who keeps standing in front of the module is recognized - and beeped
+at - again every 8 s.
 
 ## Installation
 

@@ -139,7 +139,7 @@ class Fp002Component : public Component, public uart::UARTDevice {
   void add_on_face_recognized_callback(std::function<void(uint16_t, std::string, bool)> &&cb) {
     this->face_recognized_callback_.add(std::move(cb));
   }
-  void add_on_face_rejected_callback(std::function<void(uint8_t)> &&cb) {
+  void add_on_face_rejected_callback(std::function<void(uint8_t, bool)> &&cb) {
     this->face_rejected_callback_.add(std::move(cb));
   }
   void add_on_enroll_success_callback(std::function<void(uint16_t, std::string, bool)> &&cb) {
@@ -373,7 +373,7 @@ class Fp002Component : public Component, public uart::UARTDevice {
 
   CallbackManager<void()> ready_callback_;
   CallbackManager<void(uint16_t, std::string, bool)> face_recognized_callback_;
-  CallbackManager<void(uint8_t)> face_rejected_callback_;
+  CallbackManager<void(uint8_t, bool)> face_rejected_callback_;
   CallbackManager<void(uint16_t, std::string, bool)> enroll_success_callback_;
   CallbackManager<void(uint8_t)> enroll_failed_callback_;
   CallbackManager<void(uint16_t)> delete_success_callback_;
@@ -398,11 +398,15 @@ class Fp002FaceRecognizedTrigger : public Trigger<uint16_t, std::string, bool> {
   }
 };
 
-// Argument: result/reason code, see the manual's "MR_..." table (section 3.2.1)
-class Fp002FaceRejectedTrigger : public Trigger<uint8_t> {
+// Arguments: result/reason code (see the manual's "MR_..." table, section 3.2.1),
+// face_seen (true when a face/palm was in front of the module during the attempt -
+// the same condition as the red LED blink and the "Rejected" event; false for an
+// empty-scene timeout)
+class Fp002FaceRejectedTrigger : public Trigger<uint8_t, bool> {
  public:
   explicit Fp002FaceRejectedTrigger(Fp002Component *parent) {
-    parent->add_on_face_rejected_callback([this](uint8_t reason) { this->trigger(reason); });
+    parent->add_on_face_rejected_callback(
+        [this](uint8_t reason, bool face_seen) { this->trigger(reason, face_seen); });
   }
 };
 

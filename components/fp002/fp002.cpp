@@ -738,14 +738,16 @@ void Fp002Component::handle_reply_(uint8_t mid, uint8_t result, const uint8_t *d
       if (this->face_recognized_binary_sensor_ != nullptr)
         this->face_recognized_binary_sensor_->publish_state(false);
 #endif
-      if (this->verify_face_seen_ || result == MR_FAILED4_LIVENESSCHECK || result == MR_FAILED4_UNKNOWN_HANDUSER) {
+      const bool face_seen =
+          this->verify_face_seen_ || result == MR_FAILED4_LIVENESSCHECK || result == MR_FAILED4_UNKNOWN_HANDUSER;
+      if (face_seen) {
         this->publish_event_(std::string("Rejected: not recognized (") + result_name_(result) + ")");
         // Only a real rejection (a face/palm was there), not an empty-scene timeout.
         if (this->recognition_led_)
           this->start_led_blinks_(FP002_LED_RED, 2);
       }
       this->last_verify_matched_ = false;
-      this->face_rejected_callback_.call(result);
+      this->face_rejected_callback_.call(result, face_seen);
     }
     return;
   }

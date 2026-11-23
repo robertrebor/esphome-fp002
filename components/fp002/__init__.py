@@ -22,7 +22,7 @@ Fp002FaceRecognizedTrigger = fp002_ns.class_(
     "Fp002FaceRecognizedTrigger", automation.Trigger.template(cg.uint16, cg.std_string, cg.bool_)
 )
 Fp002FaceRejectedTrigger = fp002_ns.class_(
-    "Fp002FaceRejectedTrigger", automation.Trigger.template(cg.uint8)
+    "Fp002FaceRejectedTrigger", automation.Trigger.template(cg.uint8, cg.bool_)
 )
 Fp002EnrollSuccessTrigger = fp002_ns.class_(
     "Fp002EnrollSuccessTrigger", automation.Trigger.template(cg.uint16, cg.std_string, cg.bool_)
@@ -236,7 +236,7 @@ async def to_code(config):
 
     for conf in config.get(CONF_ON_FACE_REJECTED, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [(cg.uint8, "reason")], conf)
+        await automation.build_automation(trigger, [(cg.uint8, "reason"), (cg.bool_, "face_seen")], conf)
 
     for conf in config.get(CONF_ON_ENROLL_SUCCESS, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
