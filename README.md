@@ -204,7 +204,7 @@ Add this repo as an external component in your ESPHome YAML:
 
 ```yaml
 external_components:
-  - source: github://robertrebor/esphome-fp002@v1.2.0
+  - source: github://robertrebor/esphome-fp002@v1.3.0
     components: [fp002]
 ```
 
@@ -298,7 +298,7 @@ bulk delete, module ready / module restarted.
 ```yaml
 web_server:
   version: 3
-  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.2.0/web/fp002-ui.js"
+  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.3.0/web/fp002-ui.js"
 ```
 
 The page is a single script, [`web/fp002-ui.js`](web/fp002-ui.js), that uses

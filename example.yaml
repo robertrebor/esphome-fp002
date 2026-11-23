@@ -80,10 +80,10 @@ ota:
 # block if you don't want a web server on the device.
 web_server:
   version: 3
-  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.2.0/web/fp002-ui.js"
+  js_url: "https://cdn.jsdelivr.net/gh/robertrebor/esphome-fp002@v1.3.0/web/fp002-ui.js"
 
 external_components:
-  - source: github://robertrebor/esphome-fp002@v1.2.0
+  - source: github://robertrebor/esphome-fp002@v1.3.0
     components: [fp002]
 
 uart:
